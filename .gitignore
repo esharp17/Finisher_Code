@@ -1,0 +1,19 @@
+# Arduino / embedded build artifacts
+*.bin
+*.hex
+*.elf
+*.map
+
+# Common IDE/editor folders
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PlatformIO
+.pio/
+
+# Arduino IDE build folder (varies)
+build/

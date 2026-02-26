@@ -14,7 +14,7 @@ const int STEPS_PER_REV = 200;
 
 // ---------------- DEFAULT PARAMETERS ----------------
 float planetRPM  = 0.0f;
-float centralRPM = 0.0f
+float centralRPM = 0.0f;
 
 float defaultAccelRPMs2 = 50.0f;
 
@@ -66,6 +66,10 @@ unsigned long pauseStartMs = 0;
 float pausePlanetStartRPM  = 0.0f;
 float pauseCentralStartRPM = 0.0f;
 
+// ---------------- STATUS REPORTING ----------------
+unsigned long lastStatusMs = 0;
+const unsigned long STATUS_PERIOD_MS = 250;
+
 // ---------------- HELPERS ----------------
 float rpmToStepsPerSec(float rpm) {
   return (rpm * STEPS_PER_REV) / 60.0f;
@@ -94,6 +98,38 @@ void setCentralProfile(float rpm) {
 void applySpeeds() {
   setPlanetProfile(planetRPM);
   setCentralProfile(centralRPM);
+}
+
+void emitStatusLine() {
+  unsigned long now = millis();
+  if (now - lastStatusMs < STATUS_PERIOD_MS) return;
+  lastStatusMs = now;
+
+  const char* state = "IDLE";
+  if (!systemRunning) {
+    state = "STOPPED";
+  } else if (sopActive) {
+    if (sopPaused) state = "SOP_PAUSED";
+    else if (!sopRampDone) state = "SOP_RAMP";
+    else if (reversalActive) state = "SOP_REV";
+    else state = "SOP_RUN";
+  } else {
+    state = "MANUAL";
+  }
+
+  Serial.print("STATUS state=");
+  Serial.print(state);
+  Serial.print(" planetRPM=");
+  Serial.print(planetRPM, 1);
+  Serial.print(" centralRPM=");
+  Serial.print(centralRPM, 1);
+  Serial.print(" sopActive=");
+  Serial.print(sopActive ? 1 : 0);
+  Serial.print(" reversalActive=");
+  Serial.print(reversalActive ? 1 : 0);
+  Serial.print(" paused=");
+  Serial.print(sopPaused ? 1 : 0);
+  Serial.println();
 }
 
 // ---------------- SOP INITIAL RAMP ----------------
@@ -482,6 +518,8 @@ void setup() {
 
 void loop() {
   handleSerialCommand();
+
+  emitStatusLine();
 
   if (!systemRunning) {
     planet.runSpeed();

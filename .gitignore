@@ -17,3 +17,7 @@ Thumbs.db
 
 # Arduino IDE build folder (varies)
 build/
+
+# Node / Electron
+node_modules/
+package-lock.json

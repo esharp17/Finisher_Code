@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=800, height=480" />
+    <title>Finisher UI</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-red">IKLS</span>
+          <span class="brand-white">martin</span>
+          <span class="brand-gray">GROUP</span>
+        </div>
+      </header>
+
+      <main class="panel">
+        <div class="columns">
+          <div class="col-left">
+            <div class="timer" id="mainTimer">00:00</div>
+            <div class="row buttons">
+              <button class="btn btn-dark" id="startBtn">Start</button>
+              <button class="btn btn-stop" id="stopBtn">Stop</button>
+            </div>
+            <button class="btn btn-sop" id="sopBtn">Standard Operating Procedure</button>
+          </div>
+
+          <div class="col-right">
+            <div class="card">
+              <div class="card-title">Central Speed</div>
+              <div class="spinner">
+                <button class="spin" data-target="central" data-dir="up">▲</button>
+                <div class="value"><span id="centralVal">0</span> <span class="unit">RPM</span></div>
+                <button class="spin" data-target="central" data-dir="down">▼</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Planet Speed</div>
+              <div class="spinner">
+                <button class="spin" data-target="planet" data-dir="up">▲</button>
+                <div class="value"><span id="planetVal">0</span> <span class="unit">RPM</span></div>
+                <button class="spin" data-target="planet" data-dir="down">▼</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Time</div>
+              <div class="spinner">
+                <button class="spin" data-target="time" data-dir="up">▲</button>
+                <div class="value"><span id="timeVal">0</span> <span class="unit">mins</span></div>
+                <button class="spin" data-target="time" data-dir="down">▼</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <footer class="footer">
+          <div class="footer-label">Time Until Abrasive Change</div>
+          <div class="mini-timer" id="abrasiveTimer">12:00:00</div>
+        </footer>
+      </main>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>

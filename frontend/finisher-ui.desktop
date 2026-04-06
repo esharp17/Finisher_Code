@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Finisher UI
+Comment=Touchscreen controller for Finisher
+Exec=bash -c "cd /home/pi/Finisher_Code/frontend && npm run start"
+Terminal=false
+X-GNOME-Autostart-enabled=true

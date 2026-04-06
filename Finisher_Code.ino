@@ -1,568 +1,399 @@
+// ============================================================
+//  Finisher Controller – AccelStepper w/ DM556 Drivers
+//
+//  Motors:
+//    Planetary 1 (NEMA 17) : PUL+ = D6,  DIR+ = D7
+//    Planetary 2 (NEMA 17) : PUL+ = D2,  DIR+ = D3
+//    Central     (NEMA 23) : PUL+ = D4,  DIR+ = D5
+//
+//  Vibration Motor (IBT_2 @ 12V):
+//    RPWM = D8,  LPWM = D9
+//
+//  Serial commands (115200 baud, lowercase):
+//    prpm <value>       – set planetary RPM (both P1 & P2)
+//    crpm <value>       – set central RPM
+//    vib <0-100>        – set vibration intensity as percentage
+//    start              – ramp motors to current target RPMs
+//    stop               – ramp all to 0, cancel everything
+//    pause              – ramp to 0, hold targets for resume
+//    resume             – ramp back to saved targets
+//    cancel             – full stop + clear targets
+//    sop                – Standard Operating Procedure
+//                         (planet 300, central 280, 3h timer)
+//    status             – print current state (also auto every 500ms)
+// ============================================================
+
 #include <AccelStepper.h>
 
-// ---------------- PIN SETTINGS ----------------
-const int PLANET_STEP = 4;
-const int PLANET_DIR  = 3;
-const int PLANET_EN   = 2;
+// ---------- Pin Definitions ----------
+#define PLANETARY1_PUL  6
+#define PLANETARY1_DIR  7
+#define PLANETARY2_PUL  2
+#define PLANETARY2_DIR  3
+#define CENTRAL_PUL     4
+#define CENTRAL_DIR     5
 
-const int CENTRAL_STEP = 6;
-const int CENTRAL_DIR  = 5;
-const int CENTRAL_EN   = 7;
+#define VIB_RPWM  8
+#define VIB_LPWM  9
 
-// ---------------- STEPPER CONFIG ----------------
-const int STEPS_PER_REV = 200;
+// ---------- Motor Specs ----------
+#define STEPS_PER_REV  200
 
-// ---------------- DEFAULT PARAMETERS ----------------
-float planetRPM  = 0.0f;
-float centralRPM = 0.0f;
+// ---------- Ramp ----------
+float RAMP_TIME_SECONDS = 5.0f;
 
-float defaultAccelRPMs2 = 50.0f;
+// ---------- AccelStepper Instances ----------
+AccelStepper planetary1(AccelStepper::DRIVER, PLANETARY1_PUL, PLANETARY1_DIR);
+AccelStepper planetary2(AccelStepper::DRIVER, PLANETARY2_PUL, PLANETARY2_DIR);
+AccelStepper central   (AccelStepper::DRIVER, CENTRAL_PUL,    CENTRAL_DIR);
 
-// ---------------- SOP SETTINGS ----------------
-const float SOP_RAMP_TIME_SEC       = 15.0f;   // initial ramp-up
-const float SOP_PLANET_TARGET_RPM   = 170.0f;
-const float SOP_CENTRAL_TARGET_RPM  = 150.0f;
+// ---------- Global State ----------
+float  targetPlanetRPM  = 0.0f;
+float  targetCentralRPM = 0.0f;
+float  currentPlanetRPM = 0.0f;
+float  currentCentralRPM = 0.0f;
 
-// Reversal ramp settings
-const float REV_DECEL_TIME_SEC      = 15.0f;
-const float REV_ACCEL_TIME_SEC      = 15.0f;
-const float REV_TOTAL_TIME_SEC      = REV_DECEL_TIME_SEC + REV_ACCEL_TIME_SEC;
-
-// Pause behavior
-const float PAUSE_DECEL_TIME_SEC    = 3.0f;
-
-// ---------------- STATE ----------------
-AccelStepper planet(AccelStepper::DRIVER, PLANET_STEP, PLANET_DIR);
-AccelStepper central(AccelStepper::DRIVER, CENTRAL_STEP, CENTRAL_DIR);
+uint8_t vibPercent   = 0;
+bool    vibRunning   = false;
 
 bool systemRunning = false;
+bool systemPaused  = false;
 bool sopActive     = false;
-unsigned long sopStartMs = 0;
-bool sopRampDone  = false;
 
-// ---------------- MANUAL RAMP STATE ----------------
-bool   rampPlanetActive  = false;
-bool   rampCentralActive = false;
-float  p_startRPM = 0, p_targetRPM = 0;
-float  c_startRPM = 0, c_targetRPM = 0;
+// Saved targets for pause/resume
+float savedPlanetRPM  = 0.0f;
+float savedCentralRPM = 0.0f;
+
+// ---------- Ramp State ----------
+bool  rampPlanetActive  = false;
+bool  rampCentralActive = false;
+float p_startRPM = 0, p_goalRPM = 0;
+float c_startRPM = 0, c_goalRPM = 0;
 unsigned long p_rampStartMs = 0;
 unsigned long c_rampStartMs = 0;
 
-const float MANUAL_RAMP_TIME_SEC = 5.0f;
-
-// ---------------- SOP REVERSAL STATE ----------------
-long centralStepCounter = 0;
-long lastCentralPos     = 0;
-int  centralDirection   = 1;           // 1 = forward, -1 = reverse
-const long CENTRAL_REVERSAL_STEPS = 800L * STEPS_PER_REV;
-
-bool   reversalActive   = false;       // true during the 30-second decel+accel
-bool   reversalFlipped  = false;       // true after direction flipped at 0 RPM
-unsigned long reversalStartMs = 0;
-
-// ---------------- SOP PAUSE STATE ----------------
-bool sopPaused           = false;
-unsigned long pauseStartMs = 0;
-float pausePlanetStartRPM  = 0.0f;
-float pauseCentralStartRPM = 0.0f;
-
-// ---------------- STATUS REPORTING ----------------
+// ---------- Status Reporting ----------
 unsigned long lastStatusMs = 0;
-const unsigned long STATUS_PERIOD_MS = 250;
+const unsigned long STATUS_PERIOD_MS = 500;
 
-// ---------------- HELPERS ----------------
-float rpmToStepsPerSec(float rpm) {
-  return (rpm * STEPS_PER_REV) / 60.0f;
+// ============================================================
+//  Vibration Motor
+// ============================================================
+void setVibration(bool enable) {
+  if (enable && vibPercent > 0) {
+    uint8_t pwm = (uint8_t)((vibPercent / 100.0f) * 255.0f);
+    analogWrite(VIB_RPWM, pwm);
+    digitalWrite(VIB_LPWM, LOW);
+    vibRunning = true;
+  } else {
+    analogWrite(VIB_RPWM, 0);
+    digitalWrite(VIB_LPWM, LOW);
+    vibRunning = false;
+  }
 }
 
-float rpm2ToStepsPerSec2(float rpm_s2) {
-  return (rpm_s2 * STEPS_PER_REV) / 60.0f;
+// ============================================================
+//  Stepper Helpers
+// ============================================================
+float rpmToSps(float rpm) {
+  return (rpm / 60.0f) * STEPS_PER_REV;
 }
 
-void setPlanetProfile(float rpm) {
-  float spd = rpmToStepsPerSec(rpm);
-  float acc = rpm2ToStepsPerSec2(defaultAccelRPMs2);
-  planet.setMaxSpeed(spd);
-  planet.setAcceleration(acc);
-  planet.setSpeed(spd);
+void applyPlanetSpeed(float rpm) {
+  float spd = rpmToSps(rpm);
+  float acc = (spd > 0 && RAMP_TIME_SECONDS > 0) ? spd / RAMP_TIME_SECONDS : 100.0f;
+  if (acc < 10.0f) acc = 10.0f;
+
+  planetary1.setMaxSpeed(spd > 0 ? spd : 1);
+  planetary1.setAcceleration(acc);
+  planetary1.moveTo((long)2000000000L);
+
+  planetary2.setMaxSpeed(spd > 0 ? spd : 1);
+  planetary2.setAcceleration(acc);
+  planetary2.moveTo((long)2000000000L);
 }
 
-void setCentralProfile(float rpm) {
-  float spd = rpmToStepsPerSec(rpm);
-  float acc = rpm2ToStepsPerSec2(defaultAccelRPMs2);
-  central.setMaxSpeed(spd);
+void applyCentralSpeed(float rpm) {
+  float spd = rpmToSps(rpm);
+  float acc = (spd > 0 && RAMP_TIME_SECONDS > 0) ? spd / RAMP_TIME_SECONDS : 100.0f;
+  if (acc < 10.0f) acc = 10.0f;
+
+  central.setMaxSpeed(spd > 0 ? spd : 1);
   central.setAcceleration(acc);
-  central.setSpeed(spd * centralDirection);
+  central.moveTo((long)2000000000L);
 }
 
-void applySpeeds() {
-  setPlanetProfile(planetRPM);
-  setCentralProfile(centralRPM);
+void startRampPlanet(float fromRPM, float toRPM) {
+  p_startRPM = fromRPM;
+  p_goalRPM  = toRPM;
+  p_rampStartMs = millis();
+  rampPlanetActive = true;
 }
 
+void startRampCentral(float fromRPM, float toRPM) {
+  c_startRPM = fromRPM;
+  c_goalRPM  = toRPM;
+  c_rampStartMs = millis();
+  rampCentralActive = true;
+}
+
+void updateRamps() {
+  unsigned long now = millis();
+
+  if (rampPlanetActive) {
+    float t = (now - p_rampStartMs) / 1000.0f / RAMP_TIME_SECONDS;
+    if (t >= 1.0f) {
+      rampPlanetActive = false;
+      currentPlanetRPM = p_goalRPM;
+    } else {
+      currentPlanetRPM = p_startRPM + (p_goalRPM - p_startRPM) * t;
+    }
+    applyPlanetSpeed(currentPlanetRPM);
+  }
+
+  if (rampCentralActive) {
+    float t = (now - c_rampStartMs) / 1000.0f / RAMP_TIME_SECONDS;
+    if (t >= 1.0f) {
+      rampCentralActive = false;
+      currentCentralRPM = c_goalRPM;
+    } else {
+      currentCentralRPM = c_startRPM + (c_goalRPM - c_startRPM) * t;
+    }
+    applyCentralSpeed(currentCentralRPM);
+  }
+}
+
+void rampToTargets() {
+  startRampPlanet(currentPlanetRPM, targetPlanetRPM);
+  startRampCentral(currentCentralRPM, targetCentralRPM);
+}
+
+void rampToZero() {
+  startRampPlanet(currentPlanetRPM, 0.0f);
+  startRampCentral(currentCentralRPM, 0.0f);
+}
+
+void immediateStop() {
+  rampPlanetActive  = false;
+  rampCentralActive = false;
+  currentPlanetRPM  = 0.0f;
+  currentCentralRPM = 0.0f;
+
+  planetary1.setMaxSpeed(1);
+  planetary1.moveTo(planetary1.currentPosition());
+  planetary2.setMaxSpeed(1);
+  planetary2.moveTo(planetary2.currentPosition());
+  central.setMaxSpeed(1);
+  central.moveTo(central.currentPosition());
+
+  setVibration(false);
+}
+
+// ============================================================
+//  Status Reporting (auto every 500ms)
+// ============================================================
 void emitStatusLine() {
   unsigned long now = millis();
   if (now - lastStatusMs < STATUS_PERIOD_MS) return;
   lastStatusMs = now;
 
-  const char* state = "IDLE";
-  if (!systemRunning) {
-    state = "STOPPED";
-  } else if (sopActive) {
-    if (sopPaused) state = "SOP_PAUSED";
-    else if (!sopRampDone) state = "SOP_RAMP";
-    else if (reversalActive) state = "SOP_REV";
-    else state = "SOP_RUN";
-  } else {
-    state = "MANUAL";
-  }
+  const char* st = "IDLE";
+  if (systemPaused) st = "PAUSED";
+  else if (sopActive) st = "SOP";
+  else if (systemRunning) st = "RUNNING";
 
   Serial.print("STATUS state=");
-  Serial.print(state);
+  Serial.print(st);
   Serial.print(" planetRPM=");
-  Serial.print(planetRPM, 1);
+  Serial.print(currentPlanetRPM, 1);
   Serial.print(" centralRPM=");
-  Serial.print(centralRPM, 1);
-  Serial.print(" sopActive=");
-  Serial.print(sopActive ? 1 : 0);
-  Serial.print(" reversalActive=");
-  Serial.print(reversalActive ? 1 : 0);
+  Serial.print(currentCentralRPM, 1);
+  Serial.print(" targetPlanetRPM=");
+  Serial.print(targetPlanetRPM, 1);
+  Serial.print(" targetCentralRPM=");
+  Serial.print(targetCentralRPM, 1);
+  Serial.print(" vib=");
+  Serial.print(vibPercent);
   Serial.print(" paused=");
-  Serial.print(sopPaused ? 1 : 0);
+  Serial.print(systemPaused ? 1 : 0);
+  Serial.print(" sop=");
+  Serial.print(sopActive ? 1 : 0);
   Serial.println();
 }
 
-// ---------------- SOP INITIAL RAMP ----------------
-void updateSopInitialRamp() {
-  if (sopRampDone) return;
-
-  float elapsedSec = (millis() - sopStartMs) / 1000.0f;
-
-  if (elapsedSec >= SOP_RAMP_TIME_SEC) {
-    planetRPM  = SOP_PLANET_TARGET_RPM;
-    centralRPM = SOP_CENTRAL_TARGET_RPM;
-    applySpeeds();
-    sopRampDone = true;
-    Serial.println("[SOP] Initial 15s ramp complete.");
-    return;
-  }
-
-  float r = elapsedSec / SOP_RAMP_TIME_SEC;   // 0 → 1
-
-  planetRPM  = r * SOP_PLANET_TARGET_RPM;
-  centralRPM = r * SOP_CENTRAL_TARGET_RPM;
-
-  applySpeeds();
-}
-
-// ---------------- MANUAL RAMP ----------------
-void updateManualRamps() {
-  unsigned long now = millis();
-
-  if (rampPlanetActive) {
-    float ratio = (now - p_rampStartMs) / 1000.0f / MANUAL_RAMP_TIME_SEC;
-    if (ratio >= 1.0f) {
-      rampPlanetActive = false;
-      planetRPM = p_targetRPM;
-    } else {
-      planetRPM = p_startRPM + (p_targetRPM - p_startRPM) * ratio;
-    }
-    setPlanetProfile(planetRPM);
-  }
-
-  if (rampCentralActive) {
-    float ratio = (now - c_rampStartMs) / 1000.0f / MANUAL_RAMP_TIME_SEC;
-    if (ratio >= 1.0f) {
-      rampCentralActive = false;
-      centralRPM = c_targetRPM;
-    } else {
-      centralRPM = c_startRPM + (c_targetRPM - c_startRPM) * ratio;
-    }
-    setCentralProfile(centralRPM);
-  }
-}
-
-// ---------------- SOP REVERSAL PROFILE ----------------
-void startReversalSequence() {
-  if (!sopActive || !sopRampDone || reversalActive) return;
-
-  reversalActive  = true;
-  reversalFlipped = false;
-  reversalStartMs = millis();
-
-  // reset step counter for the next 800 rev after this reversal completes
-  centralStepCounter = 0;
-
-  Serial.println("[SOP] Reversal sequence start (15s decel + 15s accel).");
-}
-
-void updateReversalSequence() {
-  if (!reversalActive) return;
-
-  float t = (millis() - reversalStartMs) / 1000.0f;
-
-  if (t <= REV_DECEL_TIME_SEC) {
-    // Phase 1: decelerate from full SOP speed to 0
-    float r_dec = t / REV_DECEL_TIME_SEC;       // 0→1
-    float factor = 1.0f - r_dec;                // 1→0
-
-    planetRPM  = SOP_PLANET_TARGET_RPM  * factor;
-    centralRPM = SOP_CENTRAL_TARGET_RPM * factor;
-    applySpeeds();
-  }
-  else if (t <= REV_TOTAL_TIME_SEC) {
-    // Flip direction only once, right at the start of accel phase
-    if (!reversalFlipped) {
-      centralDirection *= -1;
-      reversalFlipped = true;
-      Serial.println("[SOP] Central direction reversed.");
-    }
-
-    float t_acc = t - REV_DECEL_TIME_SEC;       // 0→15
-    float r_acc = t_acc / REV_ACCEL_TIME_SEC;   // 0→1
-
-    planetRPM  = SOP_PLANET_TARGET_RPM  * r_acc;
-    centralRPM = SOP_CENTRAL_TARGET_RPM * r_acc;
-    applySpeeds();
-  }
-  else {
-    // Reversal sequence complete, back at full SOP speeds
-    reversalActive  = false;
-    reversalFlipped = false;
-
-    planetRPM  = SOP_PLANET_TARGET_RPM;
-    centralRPM = SOP_CENTRAL_TARGET_RPM;
-    applySpeeds();
-
-    // Restart step-counting from here
-    lastCentralPos = central.currentPosition();
-
-    Serial.println("[SOP] Reversal sequence complete, back at full speed.");
-  }
-}
-
-// ---------------- SOP PAUSE HANDLING ----------------
-void startPause() {
-  if (!sopActive || sopPaused) return;
-
-  sopPaused = true;
-  pauseStartMs = millis();
-  pausePlanetStartRPM  = planetRPM;
-  pauseCentralStartRPM = centralRPM;
-
-  Serial.println("[SOP] Pause start.");
-}
-
-void resumePause() {
-  if (!sopPaused) return;
-
-  // Adjust SOP time references so SOP timing excludes pause duration
-  unsigned long delta = millis() - pauseStartMs;
-
-  sopStartMs += delta;
-  if (reversalActive) {
-    reversalStartMs += delta;
-  }
-
-  sopPaused = false;
-  Serial.println("[SOP] Pause resume.");
-}
-
-void updatePause() {
-  if (!sopPaused) return;
-
-  float t = (millis() - pauseStartMs) / 1000.0f;
-
-  if (t <= PAUSE_DECEL_TIME_SEC) {
-    float r_dec = t / PAUSE_DECEL_TIME_SEC;   // 0→1
-    float factor = 1.0f - r_dec;             // 1→0
-
-    planetRPM  = pausePlanetStartRPM  * factor;
-    centralRPM = pauseCentralStartRPM * factor;
-    applySpeeds();
-  } else {
-    planetRPM  = 0.0f;
-    centralRPM = 0.0f;
-    applySpeeds();
-  }
-}
-
-// ---------------- SERIAL COMMANDS ----------------
-void handleSerialCommand() {
-  if (!Serial.available()) return;
-
-  String cmd = Serial.readStringUntil('\n');
+// ============================================================
+//  Serial Command Parser
+// ============================================================
+void parseCommand(String cmd) {
   cmd.trim();
-  if (cmd.length() == 0) return;
+  cmd.toLowerCase();
 
-  String upper = cmd;
-  upper.toUpperCase();
-
-  // ---- SOP ----
-  if (upper == "SOP") {
-    systemRunning = false;
-    sopActive     = true;
-    sopRampDone   = false;
-
-    rampPlanetActive  = false;
-    rampCentralActive = false;
-    reversalActive    = false;
-    reversalFlipped   = false;
-    sopPaused         = false;
-
-    planetRPM  = 0.0f;
-    centralRPM = 0.0f;
-
-    centralDirection   = 1;
-    centralStepCounter = 0;
-    lastCentralPos     = central.currentPosition();
-
-    applySpeeds();
-
-    sopStartMs    = millis();
-    systemRunning = true;
-
-    Serial.println("[CMD] SOP start (15s ramp to 170/150, smooth reversals every 800 central revs).");
+  // ---- prpm <value> ----
+  if (cmd.startsWith("prpm ")) {
+    float rpm = cmd.substring(5).toFloat();
+    if (rpm < 0) rpm = 0;
+    targetPlanetRPM = rpm;
+    if (systemRunning && !systemPaused) {
+      startRampPlanet(currentPlanetRPM, targetPlanetRPM);
+    }
+    Serial.print("[CMD] Planet RPM → ");
+    Serial.println(targetPlanetRPM);
     return;
   }
 
-  // ---- START (manual mode) ----
-  if (upper == "START" || upper == "S") {
-    sopActive        = false;
-    sopRampDone      = false;
-    reversalActive   = false;
-    sopPaused        = false;
-    systemRunning    = true;
-    applySpeeds();
+  // ---- crpm <value> ----
+  if (cmd.startsWith("crpm ")) {
+    float rpm = cmd.substring(5).toFloat();
+    if (rpm < 0) rpm = 0;
+    targetCentralRPM = rpm;
+    if (systemRunning && !systemPaused) {
+      startRampCentral(currentCentralRPM, targetCentralRPM);
+    }
+    Serial.print("[CMD] Central RPM → ");
+    Serial.println(targetCentralRPM);
+    return;
+  }
+
+  // ---- vib <0-100> ----
+  if (cmd.startsWith("vib ")) {
+    int val = cmd.substring(4).toInt();
+    if (val < 0)   val = 0;
+    if (val > 100) val = 100;
+    vibPercent = (uint8_t)val;
+    if (vibRunning) setVibration(true);
+    Serial.print("[CMD] Vib → ");
+    Serial.print(vibPercent);
+    Serial.println("%");
+    return;
+  }
+
+  // ---- start ----
+  if (cmd == "start") {
+    systemRunning = true;
+    systemPaused  = false;
+    rampToTargets();
+    setVibration(true);
     Serial.println("[CMD] START");
     return;
   }
 
-  // ---- STOP ----
-  if (upper == "STOP" || upper == "X") {
-    systemRunning     = false;
-    sopActive         = false;
-    sopRampDone       = false;
-    rampPlanetActive  = false;
-    rampCentralActive = false;
-    reversalActive    = false;
-    reversalFlipped   = false;
-    sopPaused         = false;
-
-    planet.setSpeed(0);
-    central.setSpeed(0);
-
+  // ---- stop ----
+  if (cmd == "stop") {
+    systemRunning = false;
+    systemPaused  = false;
+    sopActive     = false;
+    targetPlanetRPM  = 0.0f;
+    targetCentralRPM = 0.0f;
+    rampToZero();
+    setVibration(false);
     Serial.println("[CMD] STOP");
     return;
   }
 
-  // ---- PAUSE / RESUME SOP ----
-  if (upper == "PAUSE") {
-    if (sopActive && !sopPaused) {
-      startPause();
-    } else {
-      Serial.println("[SOP] Pause ignored (not in SOP or already paused).");
+  // ---- pause ----
+  if (cmd == "pause") {
+    if (systemRunning && !systemPaused) {
+      systemPaused = true;
+      savedPlanetRPM  = targetPlanetRPM;
+      savedCentralRPM = targetCentralRPM;
+      rampToZero();
+      setVibration(false);
+      Serial.println("[CMD] PAUSED");
     }
     return;
   }
 
-  if (upper == "RESUME") {
-    if (sopActive && sopPaused) {
-      resumePause();
-    } else {
-      Serial.println("[SOP] Resume ignored (not paused).");
+  // ---- resume ----
+  if (cmd == "resume") {
+    if (systemPaused) {
+      systemPaused = false;
+      targetPlanetRPM  = savedPlanetRPM;
+      targetCentralRPM = savedCentralRPM;
+      rampToTargets();
+      setVibration(true);
+      Serial.println("[CMD] RESUMED");
     }
     return;
   }
 
-  // ---- MANUAL REVERSE (full 30s sequence) ----
-  if (upper == "REV") {
-    if (sopActive && sopRampDone && !reversalActive && !sopPaused) {
-      startReversalSequence();
-      Serial.println("[SOP] Manual reversal requested.");
-    } else {
-      Serial.println("[SOP] Manual reversal ignored (SOP inactive, ramp not done, already reversing, or paused).");
-    }
+  // ---- cancel ----
+  if (cmd == "cancel") {
+    systemRunning = false;
+    systemPaused  = false;
+    sopActive     = false;
+    targetPlanetRPM  = 0.0f;
+    targetCentralRPM = 0.0f;
+    savedPlanetRPM   = 0.0f;
+    savedCentralRPM  = 0.0f;
+    immediateStop();
+    Serial.println("[CMD] CANCELLED");
     return;
   }
 
-  // Cancel SOP on any manual speed command
-  if (sopActive && !upper.startsWith("P ") && !upper.startsWith("C ")) {
-    // keep SOP active unless it's clearly "manual mode" command? We'll
-    // only cancel SOP on explicit manual speed commands below.
-  }
-
-  // ---------- Planet UP/DOWN ----------
-  if (upper == "P UP") {
-    if (sopActive) {
-      Serial.println("[SOP] Cancelled by manual P UP.");
-      sopActive       = false;
-      sopRampDone     = false;
-      reversalActive  = false;
-      sopPaused       = false;
-    }
-    p_startRPM       = planetRPM;
-    p_targetRPM      = planetRPM + 10.0f;
-    rampPlanetActive = true;
-    p_rampStartMs    = millis();
-    Serial.print("[CMD] P UP → "); Serial.println(p_targetRPM);
+  // ---- sop ----
+  if (cmd == "sop") {
+    sopActive = true;
+    systemRunning = true;
+    systemPaused  = false;
+    targetPlanetRPM  = 300.0f;
+    targetCentralRPM = 280.0f;
+    rampToTargets();
+    setVibration(true);
+    Serial.println("[CMD] SOP started (Planet 300, Central 280)");
     return;
   }
 
-  if (upper == "P DOWN") {
-    if (sopActive) {
-      Serial.println("[SOP] Cancelled by manual P DOWN.");
-      sopActive       = false;
-      sopRampDone     = false;
-      reversalActive  = false;
-      sopPaused       = false;
-    }
-    p_startRPM       = planetRPM;
-    p_targetRPM      = max(0.0f, planetRPM - 10.0f);
-    rampPlanetActive = true;
-    p_rampStartMs    = millis();
-    Serial.print("[CMD] P DOWN → "); Serial.println(p_targetRPM);
+  // ---- status ----
+  if (cmd == "status") {
+    lastStatusMs = 0;
+    emitStatusLine();
     return;
   }
 
-  // ---------- Central UP/DOWN ----------
-  if (upper == "C UP") {
-    if (sopActive) {
-      Serial.println("[SOP] Cancelled by manual C UP.");
-      sopActive       = false;
-      sopRampDone     = false;
-      reversalActive  = false;
-      sopPaused       = false;
-    }
-    c_startRPM         = centralRPM;
-    c_targetRPM        = centralRPM + 10.0f;
-    rampCentralActive  = true;
-    c_rampStartMs      = millis();
-    Serial.print("[CMD] C UP → "); Serial.println(c_targetRPM);
-    return;
-  }
-
-  if (upper == "C DOWN") {
-    if (sopActive) {
-      Serial.println("[SOP] Cancelled by manual C DOWN.");
-      sopActive       = false;
-      sopRampDone     = false;
-      reversalActive  = false;
-      sopPaused       = false;
-    }
-    c_startRPM         = centralRPM;
-    c_targetRPM        = max(0.0f, centralRPM - 10.0f);
-    rampCentralActive  = true;
-    c_rampStartMs      = millis();
-    Serial.print("[CMD] C DOWN → "); Serial.println(c_targetRPM);
-    return;
-  }
-
-  // ---------- P <rpm> ----------
-  if (upper.startsWith("P ")) {
-    float rpm          = cmd.substring(2).toFloat();
-    if (sopActive) {
-      Serial.println("[SOP] Cancelled by manual P <rpm>.");
-      sopActive       = false;
-      sopRampDone     = false;
-      reversalActive  = false;
-      sopPaused       = false;
-    }
-    p_startRPM         = planetRPM;
-    p_targetRPM        = rpm;
-    rampPlanetActive   = true;
-    p_rampStartMs      = millis();
-    Serial.print("[CMD] Planet ramp → "); Serial.println(rpm);
-    return;
-  }
-
-  // ---------- C <rpm> ----------
-  if (upper.startsWith("C ")) {
-    float rpm          = cmd.substring(2).toFloat();
-    if (sopActive) {
-      Serial.println("[SOP] Cancelled by manual C <rpm>.");
-      sopActive       = false;
-      sopRampDone     = false;
-      reversalActive  = false;
-      sopPaused       = false;
-    }
-    c_startRPM         = centralRPM;
-    c_targetRPM        = rpm;
-    rampCentralActive  = true;
-    c_rampStartMs      = millis();
-    Serial.print("[CMD] Central ramp → "); Serial.println(rpm);
-    return;
-  }
-
-  Serial.print("[ERR] Unknown cmd: ");
+  Serial.print("[ERR] Unknown: ");
   Serial.println(cmd);
 }
 
-// ---------------- MAIN ----------------
+// ============================================================
 void setup() {
   Serial.begin(115200);
+  while (!Serial) {}
 
-  pinMode(PLANET_EN, OUTPUT);
-  pinMode(CENTRAL_EN, OUTPUT);
-  digitalWrite(PLANET_EN, LOW);
-  digitalWrite(CENTRAL_EN, LOW);
+  pinMode(VIB_RPWM, OUTPUT);
+  pinMode(VIB_LPWM, OUTPUT);
+  analogWrite(VIB_RPWM, 0);
+  digitalWrite(VIB_LPWM, LOW);
 
-  float acc = rpm2ToStepsPerSec2(defaultAccelRPMs2);
-  planet.setAcceleration(acc);
-  central.setAcceleration(acc);
+  planetary1.setMaxSpeed(1);
+  planetary1.setAcceleration(10);
+  planetary2.setMaxSpeed(1);
+  planetary2.setAcceleration(10);
+  central.setMaxSpeed(1);
+  central.setAcceleration(10);
 
-  applySpeeds();
-
-  Serial.println("Auto Surface Ready (SOP: 15s ramp, smooth 30s reversals every 800 central revs, PAUSE+REV supported).");
+  Serial.println(F("========================================"));
+  Serial.println(F("  Finisher Controller Ready"));
+  Serial.println(F("  Commands: prpm/crpm/vib/start/stop"));
+  Serial.println(F("            pause/resume/cancel/sop"));
+  Serial.println(F("========================================"));
 }
 
+// ============================================================
 void loop() {
-  handleSerialCommand();
+  planetary1.run();
+  planetary2.run();
+  central.run();
 
+  updateRamps();
   emitStatusLine();
 
-  if (!systemRunning) {
-    planet.runSpeed();
-    central.runSpeed();
-    return;
-  }
-
-  // If SOP is paused, override with pause decel/hold behavior
-  if (sopActive && sopPaused) {
-    updatePause();
-  }
-  else if (sopActive) {
-    // 1) Initial SOP ramp if not finished
-    if (!sopRampDone) {
-      updateSopInitialRamp();
-    }
-    // 2) Reversal sequence once SOP ramp is done
-    else if (reversalActive) {
-      updateReversalSequence();
-    }
-    // 3) Full-speed SOP, counting 800 central revs to trigger reversal
-    else {
-      long currentPos = central.currentPosition();
-      long delta      = labs(currentPos - lastCentralPos);
-      lastCentralPos  = currentPos;
-
-      centralStepCounter += delta;
-
-      if (centralStepCounter >= CENTRAL_REVERSAL_STEPS) {
-        startReversalSequence();
-      }
-
-      // keep full speeds
-      planetRPM  = SOP_PLANET_TARGET_RPM;
-      centralRPM = SOP_CENTRAL_TARGET_RPM;
-      applySpeeds();
+  static String buf = "";
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (buf.length() > 0) { parseCommand(buf); buf = ""; }
+    } else {
+      buf += c;
     }
   }
-  else {
-    // Manual mode
-    updateManualRamps();
-  }
-
-  planet.runSpeed();
-  central.runSpeed();
 }

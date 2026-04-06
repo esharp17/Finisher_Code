@@ -15,10 +15,25 @@ This folder contains a Raspberry Pi touchscreen front end (800x480) intended to 
 4. Run:
    - `npm run dev`
 
-### Full-screen (kiosk-like)
-The Electron window is sized to 800x480. For a kiosk feel:
-- Hide the taskbar / run the app on login.
-- Optionally toggle fullscreen with your window manager shortcuts.
+### Auto-start on boot (kiosk-like)
+
+Run these commands on the Pi **once** after cloning and `npm install`:
+
+```bash
+mkdir -p ~/.config/autostart
+cp ~/Finisher_Code/frontend/finisher-ui.desktop ~/.config/autostart/
+```
+
+This makes the app launch automatically when the Pi boots into the desktop.
+
+> **Note:** If your Pi username is not `pi`, edit the `Exec` line in
+> `finisher-ui.desktop` to use the correct home directory path.
+
+To also hide the mouse cursor on the touchscreen:
+```bash
+sudo apt install -y unclutter
+```
+Then add `unclutter -idle 0 &` to `~/.config/lxsession/LXDE-pi/autostart`.
 
 ## Dev (on a machine with Node installed)
 

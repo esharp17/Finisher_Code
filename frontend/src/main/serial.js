@@ -32,8 +32,6 @@ class SerialManager {
     this._port = null;
     this._parser = null;
     this._connectedPath = null;
-    this._lastStatus = null;
-
     this._settingsPath = path.join(this._userDataDir, 'serial-settings.json');
   }
 
@@ -46,10 +44,6 @@ class SerialManager {
       connected: Boolean(this._port && this._port.isOpen),
       path: this._connectedPath
     };
-  }
-
-  getLastStatus() {
-    return this._lastStatus;
   }
 
   _setConnected(pathValue) {
@@ -72,10 +66,6 @@ class SerialManager {
     this._parser.on('data', (line) => {
       const trimmed = String(line).trim();
       if (!trimmed) return;
-
-      if (trimmed.startsWith('STATUS ')) {
-        this._lastStatus = trimmed;
-      }
 
       if (this._onLine) this._onLine(trimmed);
     });

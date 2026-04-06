@@ -76,6 +76,3 @@ ipcMain.handle('serial:getConnectionInfo', async () => {
   return serial.getConnectionInfo();
 });
 
-ipcMain.handle('serial:getLastStatus', async () => {
-  return serial.getLastStatus();
-});

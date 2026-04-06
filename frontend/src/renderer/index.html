@@ -14,44 +14,58 @@
           <span class="brand-white">martin</span>
           <span class="brand-gray">GROUP</span>
         </div>
+        <div class="tab-bar">
+          <button class="tab active" data-tab="control">Control</button>
+          <button class="tab" data-tab="log">Data Log</button>
+        </div>
       </header>
 
-      <main class="panel">
+      <!-- ===== CONTROL TAB ===== -->
+      <main class="panel tab-content active" id="tab-control">
         <div class="columns">
           <div class="col-left">
             <div class="timer" id="mainTimer">00:00</div>
             <div class="row buttons">
               <button class="btn btn-dark" id="startBtn">Start</button>
-              <button class="btn btn-stop" id="stopBtn">Stop</button>
+              <button class="btn btn-pause" id="pauseBtn">Pause</button>
             </div>
-            <button class="btn btn-sop" id="sopBtn">Standard Operating Procedure</button>
+            <button class="btn btn-sop" id="sopBtn">SOP</button>
           </div>
 
           <div class="col-right">
             <div class="card">
-              <div class="card-title">Central Speed</div>
+              <div class="card-title">Planet Speed</div>
               <div class="spinner">
-                <button class="spin" data-target="central" data-dir="up">▲</button>
-                <div class="value"><span id="centralVal">0</span> <span class="unit">RPM</span></div>
-                <button class="spin" data-target="central" data-dir="down">▼</button>
+                <button class="spin" data-target="planet" data-dir="up">&#9650;</button>
+                <div class="value"><span id="planetVal">0</span> <span class="unit">RPM</span></div>
+                <button class="spin" data-target="planet" data-dir="down">&#9660;</button>
               </div>
             </div>
 
             <div class="card">
-              <div class="card-title">Planet Speed</div>
+              <div class="card-title">Central Speed</div>
               <div class="spinner">
-                <button class="spin" data-target="planet" data-dir="up">▲</button>
-                <div class="value"><span id="planetVal">0</span> <span class="unit">RPM</span></div>
-                <button class="spin" data-target="planet" data-dir="down">▼</button>
+                <button class="spin" data-target="central" data-dir="up">&#9650;</button>
+                <div class="value"><span id="centralVal">0</span> <span class="unit">RPM</span></div>
+                <button class="spin" data-target="central" data-dir="down">&#9660;</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Vibration</div>
+              <div class="spinner">
+                <button class="spin" data-target="vib" data-dir="up">&#9650;</button>
+                <div class="value"><span id="vibVal">0</span> <span class="unit">%</span></div>
+                <button class="spin" data-target="vib" data-dir="down">&#9660;</button>
               </div>
             </div>
 
             <div class="card">
               <div class="card-title">Time</div>
               <div class="spinner">
-                <button class="spin" data-target="time" data-dir="up">▲</button>
+                <button class="spin" data-target="time" data-dir="up">&#9650;</button>
                 <div class="value"><span id="timeVal">0</span> <span class="unit">mins</span></div>
-                <button class="spin" data-target="time" data-dir="down">▼</button>
+                <button class="spin" data-target="time" data-dir="down">&#9660;</button>
               </div>
             </div>
           </div>
@@ -61,6 +75,30 @@
           <div class="footer-label">Time Until Abrasive Change</div>
           <div class="mini-timer" id="abrasiveTimer">12:00:00</div>
         </footer>
+      </main>
+
+      <!-- ===== DATA LOG TAB ===== -->
+      <main class="panel tab-content" id="tab-log">
+        <div class="log-toolbar">
+          <button class="btn btn-dark btn-sm" id="exportCsvBtn">Export CSV</button>
+          <button class="btn btn-dark btn-sm" id="clearLogBtn">Clear Log</button>
+          <span class="log-count" id="logCount">0 entries</span>
+        </div>
+        <div class="log-table-wrap">
+          <table class="log-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>State</th>
+                <th>Planet RPM</th>
+                <th>Central RPM</th>
+                <th>Vib %</th>
+                <th>Timer</th>
+              </tr>
+            </thead>
+            <tbody id="logBody"></tbody>
+          </table>
+        </div>
       </main>
     </div>
 

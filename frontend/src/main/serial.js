@@ -74,6 +74,7 @@ class SerialManager {
       this._port = null;
       this._parser = null;
       this._setConnected(null);
+      this._startRetryLoop();
     });
 
     this._port.on('error', () => {
@@ -111,6 +112,18 @@ class SerialManager {
   }
 
   async autoConnect() {
+    const result = await this._tryAutoConnect();
+    if (!result.connected) {
+      this._startRetryLoop();
+    }
+    return result;
+  }
+
+  async _tryAutoConnect() {
+    if (this._port && this._port.isOpen) {
+      return { ...this.getConnectionInfo(), auto: true };
+    }
+
     const saved = safeReadJson(this._settingsPath) || {};
     const ports = await this.listPorts();
 
@@ -123,6 +136,13 @@ class SerialManager {
     // Prefer Arduino-like ports if nothing saved
     for (const p of ports) {
       if (p.path && (String(p.manufacturer || '').toLowerCase().includes('arduino') || String(p.friendlyName || '').toLowerCase().includes('arduino'))) {
+        candidates.push(p.path);
+      }
+    }
+
+    // Prefer common Pi serial paths
+    for (const p of ports) {
+      if (p.path && (/ttyACM|ttyUSB/.test(p.path))) {
         candidates.push(p.path);
       }
     }
@@ -143,6 +163,26 @@ class SerialManager {
     }
 
     return { ...this.getConnectionInfo(), auto: true };
+  }
+
+  _startRetryLoop() {
+    if (this._retryTimer) return;
+    this._retryTimer = setInterval(async () => {
+      if (this._port && this._port.isOpen) {
+        clearInterval(this._retryTimer);
+        this._retryTimer = null;
+        return;
+      }
+      try {
+        await this._tryAutoConnect();
+        if (this._port && this._port.isOpen) {
+          clearInterval(this._retryTimer);
+          this._retryTimer = null;
+        }
+      } catch {
+        // will retry next interval
+      }
+    }, 3000);
   }
 }
 

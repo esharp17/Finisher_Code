@@ -200,17 +200,17 @@ function addLogEntry() {
   document.getElementById('logCount').textContent = `${dataLog.length} entries`;
 }
 
-function exportCsv() {
+async function exportCsv() {
   if (dataLog.length === 0) return;
   const header = 'Time,State,Planet RPM,Central RPM,Vib %,Timer\n';
   const rows = dataLog.map(e => `${e.time},${e.state},${e.planetRpm},${e.centralRpm},${e.vib},${e.timer}`).join('\n');
-  const blob = new Blob([header + rows], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `finisher-log-${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const fileName = `finisher-log-${new Date().toISOString().slice(0, 10)}.csv`;
+  try {
+    const savedPath = await window.finisher.saveCsv(header + rows, fileName);
+    console.log('CSV saved to', savedPath);
+  } catch (err) {
+    console.error('CSV export failed', err);
+  }
 }
 
 function clearLog() {

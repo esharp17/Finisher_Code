@@ -1,5 +1,7 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { SerialManager } = require('./serial');
 
 let mainWindow;
@@ -74,5 +76,14 @@ ipcMain.handle('serial:sendLine', async (_evt, line) => {
 
 ipcMain.handle('serial:getConnectionInfo', async () => {
   return serial.getConnectionInfo();
+});
+
+ipcMain.handle('app:saveCsv', async (_evt, csvString, suggestedName) => {
+  const docsDir = path.join(os.homedir(), 'Documents');
+  const saveDir = fs.existsSync(docsDir) ? docsDir : os.homedir();
+  const filePath = path.join(saveDir, suggestedName || 'finisher-log.csv');
+  fs.writeFileSync(filePath, csvString, 'utf8');
+  shell.showItemInFolder(filePath);
+  return filePath;
 });
 

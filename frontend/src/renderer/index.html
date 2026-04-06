@@ -88,8 +88,9 @@
           <table class="log-table">
             <thead>
               <tr>
+                <th>Run</th>
                 <th>Time</th>
-                <th>State</th>
+                <th>Event</th>
                 <th>Planet RPM</th>
                 <th>Central RPM</th>
                 <th>Vib %</th>
@@ -100,6 +101,15 @@
           </table>
         </div>
       </main>
+
+      <!-- ===== ABRASIVE CHANGE POPUP ===== -->
+      <div class="overlay" id="abrasiveOverlay">
+        <div class="popup">
+          <div class="popup-title">Abrasive Change Required</div>
+          <div class="popup-msg">12 hours of run time have elapsed.<br>Please change the abrasive before continuing.</div>
+          <button class="btn btn-dark popup-btn" id="abrasiveDoneBtn">Done</button>
+        </div>
+      </div>
     </div>
 
     <script src="renderer.js"></script>

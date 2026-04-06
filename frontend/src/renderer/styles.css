@@ -267,3 +267,44 @@ html, body {
 }
 
 .log-table tr:nth-child(even) { background: #f7f7f7; }
+
+/* ===== ABRASIVE CHANGE OVERLAY ===== */
+.overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+.overlay.visible { display: flex; }
+
+.popup {
+  background: linear-gradient(#f0f0f0, #d8d8d8);
+  border-radius: 10px;
+  padding: 24px 32px;
+  text-align: center;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  max-width: 420px;
+}
+
+.popup-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #c0392b;
+  margin-bottom: 10px;
+}
+
+.popup-msg {
+  font-size: 14px;
+  color: #333;
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+.popup-btn {
+  font-size: 18px;
+  padding: 10px 40px;
+  min-width: 160px;
+}

@@ -36,7 +36,10 @@
 
           <div class="col-right">
             <div class="card">
-              <div class="card-title">Planet Speed</div>
+              <div class="card-header">
+                <div class="card-title">Planet Speed</div>
+                <span class="beacon" id="beaconPlanet"></span>
+              </div>
               <div class="spinner">
                 <button class="spin" data-target="planet" data-dir="up">&#9650;</button>
                 <div class="value"><span id="planetVal">0</span> <span class="unit">RPM</span></div>
@@ -45,7 +48,10 @@
             </div>
 
             <div class="card">
-              <div class="card-title">Central Speed</div>
+              <div class="card-header">
+                <div class="card-title">Central Speed</div>
+                <span class="beacon" id="beaconCentral"></span>
+              </div>
               <div class="spinner">
                 <button class="spin" data-target="central" data-dir="up">&#9650;</button>
                 <div class="value"><span id="centralVal">0</span> <span class="unit">RPM</span></div>
@@ -54,7 +60,10 @@
             </div>
 
             <div class="card">
-              <div class="card-title">Vibration</div>
+              <div class="card-header">
+                <div class="card-title">Vibration</div>
+                <span class="beacon" id="beaconVib"></span>
+              </div>
               <div class="spinner">
                 <button class="spin" data-target="vib" data-dir="up">&#9650;</button>
                 <div class="value"><span id="vibVal">0</span> <span class="unit">%</span></div>
@@ -129,7 +138,7 @@
               <label>Vibration %</label>
               <div class="setting-ctrl">
                 <button class="spin" id="sopVibDown">&#9660;</button>
-                <span class="setting-val" id="sopVibVal">33</span>
+                <span class="setting-val" id="sopVibVal">35</span>
                 <button class="spin" id="sopVibUp">&#9650;</button>
               </div>
             </div>
@@ -174,6 +183,18 @@
           </div>
         </div>
       </main>
+
+      <!-- ===== CONFIRM EXIT SOP POPUP ===== -->
+      <div class="overlay" id="confirmSopExitOverlay">
+        <div class="popup">
+          <div class="popup-title">Exit SOP Mode?</div>
+          <div class="popup-msg">Changing speed settings will exit SOP mode.<br>Are you sure you want to continue?</div>
+          <div class="popup-btns">
+            <button class="btn btn-dark popup-btn" id="confirmSopExitYes">Yes, Exit SOP</button>
+            <button class="btn btn-pause popup-btn" id="confirmSopExitNo">Cancel</button>
+          </div>
+        </div>
+      </div>
 
       <!-- ===== CONFIRM RESET ABRASIVE POPUP ===== -->
       <div class="overlay" id="confirmResetOverlay">

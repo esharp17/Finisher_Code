@@ -176,12 +176,42 @@ html, body {
   box-shadow: inset 0 1px rgba(255,255,255,0.45);
 }
 
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
 .card-title {
   font-size: 10px;
   color: #3b3b3b;
   text-align: center;
-  margin-bottom: 2px;
   font-weight: 700;
+}
+
+.beacon {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.25);
+  background: #d94b44;
+  box-shadow: 0 0 4px rgba(0,0,0,0.2);
+  flex-shrink: 0;
+}
+.beacon.green {
+  background: #4caf50;
+  box-shadow: 0 0 6px rgba(76,175,80,0.5);
+}
+.beacon.yellow {
+  background: #e6a817;
+  box-shadow: 0 0 6px rgba(230,168,23,0.5);
+}
+.beacon.red {
+  background: #d94b44;
+  box-shadow: 0 0 6px rgba(217,75,68,0.4);
 }
 
 .spinner {

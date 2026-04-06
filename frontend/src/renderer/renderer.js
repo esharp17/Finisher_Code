@@ -5,16 +5,27 @@
 const settings = {
   sopPlanetRpm: 300,
   sopCentralRpm: 280,
-  sopVib: 33,
+  sopVib: 35,
   sopTimeMins: 180,
   abrasiveHours: 12
 };
 
-const state = {
+// Goal values (what the operator sets via spinners / SOP)
+const goal = {
   planetRpm: 0,
   centralRpm: 0,
   vib: 0,
-  timeMins: 0,
+  timeMins: 0
+};
+
+// Live values (actual readings from Arduino STATUS lines)
+const live = {
+  planetRpm: 0,
+  centralRpm: 0,
+  vib: 0
+};
+
+const state = {
   running: false,
   paused: false,
   sopActive: false,
@@ -22,6 +33,9 @@ const state = {
   abrasiveMs: 12 * 60 * 60 * 1000,
   connected: false
 };
+
+// Pending SOP-exit adjustment to apply after confirmation
+let _pendingSopAdjust = null;
 
 const dataLog = [];
 let runNumber = 0;
@@ -75,15 +89,42 @@ function sendCommand(cmd) {
 }
 
 // ============================================================
+//  Beacon helpers
+// ============================================================
+const BEACON_TOLERANCE = 5; // RPM or % tolerance for "at speed"
+
+function beaconClass(goalVal, liveVal) {
+  if (goalVal === 0 && liveVal < BEACON_TOLERANCE) return 'red';
+  if (Math.abs(liveVal - goalVal) <= BEACON_TOLERANCE) return 'green';
+  return 'yellow';
+}
+
+function setBeacon(id, cls) {
+  const el = document.getElementById(id);
+  el.className = 'beacon ' + cls;
+}
+
+// ============================================================
 //  Render
 // ============================================================
 function render() {
-  document.getElementById('planetVal').textContent = state.planetRpm;
-  document.getElementById('centralVal').textContent = Math.round(state.centralRpm / 4);
-  document.getElementById('vibVal').textContent = state.vib;
-  document.getElementById('timeVal').textContent = state.timeMins;
+  document.getElementById('planetVal').textContent = goal.planetRpm;
+  document.getElementById('centralVal').textContent = Math.round(goal.centralRpm / 4);
+  document.getElementById('vibVal').textContent = goal.vib;
+  document.getElementById('timeVal').textContent = goal.timeMins;
   document.getElementById('mainTimer').textContent = formatMMSS(state.countdownMs);
   document.getElementById('abrasiveTimer').textContent = formatHHMMSS(state.abrasiveMs);
+
+  // Beacons
+  if (state.running && !state.paused) {
+    setBeacon('beaconPlanet', beaconClass(goal.planetRpm, live.planetRpm));
+    setBeacon('beaconCentral', beaconClass(goal.centralRpm, live.centralRpm));
+    setBeacon('beaconVib', beaconClass(goal.vib, live.vib));
+  } else {
+    setBeacon('beaconPlanet', 'red');
+    setBeacon('beaconCentral', 'red');
+    setBeacon('beaconVib', 'red');
+  }
 
   const connEl = document.getElementById('connStatus');
   if (state.connected) {
@@ -136,10 +177,10 @@ function startRun() {
   runNumber++;
   state.running = true;
   state.paused  = false;
-  state.countdownMs = state.timeMins * 60 * 1000;
-  sendCommand(`prpm ${state.planetRpm}`);
-  sendCommand(`crpm ${state.centralRpm}`);
-  sendCommand(`vib ${state.vib}`);
+  state.countdownMs = goal.timeMins * 60 * 1000;
+  sendCommand(`prpm ${goal.planetRpm}`);
+  sendCommand(`crpm ${goal.centralRpm}`);
+  sendCommand(`vib ${goal.vib}`);
   sendCommand('start');
   addLogEntry('STARTED');
   render();
@@ -171,10 +212,10 @@ function startSop() {
   state.running   = true;
   state.paused    = false;
   state.sopActive = true;
-  state.planetRpm  = settings.sopPlanetRpm;
-  state.centralRpm = settings.sopCentralRpm;
-  state.vib        = settings.sopVib;
-  state.timeMins   = settings.sopTimeMins;
+  goal.planetRpm  = settings.sopPlanetRpm;
+  goal.centralRpm = settings.sopCentralRpm;
+  goal.vib        = settings.sopVib;
+  goal.timeMins   = settings.sopTimeMins;
   state.countdownMs = settings.sopTimeMins * 60 * 1000;
   sendCommand(`prpm ${settings.sopPlanetRpm}`);
   sendCommand(`crpm ${settings.sopCentralRpm}`);
@@ -194,24 +235,55 @@ function fullStop() {
   render();
 }
 
+// ============================================================
+//  SOP exit confirmation
+// ============================================================
+function requestSopExit(target, dir) {
+  _pendingSopAdjust = { target, dir };
+  document.getElementById('confirmSopExitOverlay').classList.add('visible');
+}
+
+function confirmSopExit() {
+  document.getElementById('confirmSopExitOverlay').classList.remove('visible');
+  state.sopActive = false;
+  if (_pendingSopAdjust) {
+    applyAdjust(_pendingSopAdjust.target, _pendingSopAdjust.dir);
+    _pendingSopAdjust = null;
+  }
+}
+
+function cancelSopExit() {
+  document.getElementById('confirmSopExitOverlay').classList.remove('visible');
+  _pendingSopAdjust = null;
+}
+
 function adjust(target, dir) {
+  // If SOP is active and they're changing speed/vib, confirm first
+  if (state.sopActive && (target === 'planet' || target === 'central' || target === 'vib')) {
+    requestSopExit(target, dir);
+    return;
+  }
+  applyAdjust(target, dir);
+}
+
+function applyAdjust(target, dir) {
   if (target === 'planet') {
     const delta = dir === 'up' ? 10 : -10;
-    state.planetRpm = Math.max(0, state.planetRpm + delta);
-    if (state.running && !state.paused) sendCommand(`prpm ${state.planetRpm}`);
+    goal.planetRpm = Math.max(0, goal.planetRpm + delta);
+    if (state.running && !state.paused) sendCommand(`prpm ${goal.planetRpm}`);
   }
   if (target === 'central') {
     const delta = dir === 'up' ? 10 : -10;
-    state.centralRpm = Math.max(0, state.centralRpm + delta);
-    if (state.running && !state.paused) sendCommand(`crpm ${state.centralRpm}`);
+    goal.centralRpm = Math.max(0, goal.centralRpm + delta);
+    if (state.running && !state.paused) sendCommand(`crpm ${goal.centralRpm}`);
   }
   if (target === 'vib') {
-    const delta = dir === 'up' ? 10 : -10;
-    state.vib = Math.max(0, Math.min(100, state.vib + delta));
-    sendCommand(`vib ${state.vib}`);
+    const delta = dir === 'up' ? 5 : -5;
+    goal.vib = Math.max(0, Math.min(100, goal.vib + delta));
+    sendCommand(`vib ${goal.vib}`);
   }
   if (target === 'time') {
-    state.timeMins = Math.max(0, state.timeMins + (dir === 'up' ? 10 : -10));
+    goal.timeMins = Math.max(0, goal.timeMins + (dir === 'up' ? 10 : -10));
   }
   render();
 }
@@ -224,9 +296,9 @@ function addLogEntry(event) {
     run: runNumber,
     time: timeStamp(),
     event: event,
-    planetRpm: state.planetRpm,
-    centralRpm: state.centralRpm,
-    vib: state.vib,
+    planetRpm: goal.planetRpm,
+    centralRpm: goal.centralRpm,
+    vib: goal.vib,
     timer: formatMMSS(state.countdownMs)
   };
   dataLog.push(entry);
@@ -327,6 +399,10 @@ document.getElementById('sopTimeDown').addEventListener('click', () => adjustSet
 // Abrasive duration buttons
 document.getElementById('abrasiveHoursUp').addEventListener('click', () => adjustSetting('abrasiveHours', 1, 1, 48));
 document.getElementById('abrasiveHoursDown').addEventListener('click', () => adjustSetting('abrasiveHours', -1, 1, 48));
+
+// SOP exit confirmation buttons
+document.getElementById('confirmSopExitYes').addEventListener('click', confirmSopExit);
+document.getElementById('confirmSopExitNo').addEventListener('click', cancelSopExit);
 
 // Manual abrasive reset (with confirmation)
 document.getElementById('resetAbrasiveBtn').addEventListener('click', () => {
@@ -445,15 +521,15 @@ function parseSerialLine(line) {
     }
     if (kv.planetRPM !== undefined) {
       const v = Number(kv.planetRPM);
-      if (!isNaN(v)) state.planetRpm = Math.round(v);
+      if (!isNaN(v)) live.planetRpm = Math.round(v);
     }
     if (kv.centralRPM !== undefined) {
       const v = Number(kv.centralRPM);
-      if (!isNaN(v)) state.centralRpm = Math.round(v);
+      if (!isNaN(v)) live.centralRpm = Math.round(v);
     }
     if (kv.vib !== undefined) {
       const v = Number(kv.vib);
-      if (!isNaN(v)) state.vib = v;
+      if (!isNaN(v)) live.vib = v;
     }
     render();
   }

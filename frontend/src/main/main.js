@@ -13,7 +13,9 @@ function createWindow() {
     height: 480,
     useContentSize: true,
     resizable: false,
-    fullscreenable: true,
+    frame: false,
+    kiosk: true,
+    fullscreen: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -22,7 +24,6 @@ function createWindow() {
   });
 
   mainWindow.setMenuBarVisibility(false);
-  mainWindow.setContentSize(800, 480);
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 

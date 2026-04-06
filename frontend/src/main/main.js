@@ -154,9 +154,10 @@ ipcMain.handle('app:updateApp', async () => {
 
     const alreadyUpToDate = pullResult.includes('Already up to date') || pullResult.includes('Already up-to-date');
 
-    // 2) npm install (in case package.json changed)
-    if (!alreadyUpToDate) {
-      const installResult = await runCmd(npm, ['install'], frontendDir);
+    // 2) npm install only if package.json was in the changed files
+    if (!alreadyUpToDate && pullResult.includes('package.json')) {
+      console.log('[UPDATE] package.json changed, running npm install...');
+      const installResult = await runCmd(npm, ['install', '--no-optional'], frontendDir);
       console.log('[UPDATE] npm install:', installResult);
     }
 

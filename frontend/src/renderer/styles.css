@@ -309,6 +309,7 @@ html, body {
   align-items: center;
   justify-content: space-between;
   padding: 4px 0;
+  gap: 12px;
 }
 
 .setting-row label {

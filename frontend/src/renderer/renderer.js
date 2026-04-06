@@ -2,6 +2,14 @@
 //  Finisher UI – Renderer
 // ============================================================
 
+const settings = {
+  sopPlanetRpm: 300,
+  sopCentralRpm: 280,
+  sopVib: 33,
+  sopTimeMins: 180,
+  abrasiveHours: 12
+};
+
 const state = {
   planetRpm: 0,
   centralRpm: 0,
@@ -64,7 +72,7 @@ async function sendCommand(cmd) {
 // ============================================================
 function render() {
   document.getElementById('planetVal').textContent = state.planetRpm;
-  document.getElementById('centralVal').textContent = state.centralRpm;
+  document.getElementById('centralVal').textContent = Math.round(state.centralRpm / 4);
   document.getElementById('vibVal').textContent = state.vib;
   document.getElementById('timeVal').textContent = state.timeMins;
   document.getElementById('mainTimer').textContent = formatMMSS(state.countdownMs);
@@ -147,13 +155,15 @@ function startSop() {
   state.running   = true;
   state.paused    = false;
   state.sopActive = true;
-  state.planetRpm  = 300;
-  state.centralRpm = 280;
-  state.vib        = 33;
-  state.timeMins   = 180;
-  state.countdownMs = 180 * 60 * 1000;
-  sendCommand('sop');
-  sendCommand('vib 33');
+  state.planetRpm  = settings.sopPlanetRpm;
+  state.centralRpm = settings.sopCentralRpm;
+  state.vib        = settings.sopVib;
+  state.timeMins   = settings.sopTimeMins;
+  state.countdownMs = settings.sopTimeMins * 60 * 1000;
+  sendCommand(`prpm ${settings.sopPlanetRpm}`);
+  sendCommand(`crpm ${settings.sopCentralRpm}`);
+  sendCommand(`vib ${settings.sopVib}`);
+  sendCommand('start');
   addLogEntry('SOP STARTED');
   render();
 }
@@ -253,10 +263,57 @@ function showAbrasivePopup() {
 
 function dismissAbrasivePopup() {
   abrasiveLocked = false;
-  state.abrasiveMs = 12 * 60 * 60 * 1000;
+  state.abrasiveMs = settings.abrasiveHours * 60 * 60 * 1000;
+  window.finisher.saveAbrasiveMs(state.abrasiveMs).catch(() => {});
   document.getElementById('abrasiveOverlay').classList.remove('visible');
   render();
 }
+
+function resetAbrasiveTimer() {
+  state.abrasiveMs = settings.abrasiveHours * 60 * 60 * 1000;
+  window.finisher.saveAbrasiveMs(state.abrasiveMs).catch(() => {});
+  render();
+  renderSettings();
+}
+
+// ============================================================
+//  Settings
+// ============================================================
+function renderSettings() {
+  document.getElementById('sopPlanetVal').textContent = settings.sopPlanetRpm;
+  document.getElementById('sopCentralVal').textContent = settings.sopCentralRpm;
+  document.getElementById('sopVibVal').textContent = settings.sopVib;
+  document.getElementById('sopTimeVal').textContent = settings.sopTimeMins;
+  document.getElementById('abrasiveHoursVal').textContent = settings.abrasiveHours;
+  document.getElementById('abrasiveRemaining').textContent = formatHHMMSS(state.abrasiveMs);
+}
+
+function adjustSetting(key, delta, min, max) {
+  settings[key] = Math.max(min, Math.min(max, settings[key] + delta));
+  renderSettings();
+  saveSettings();
+}
+
+function saveSettings() {
+  window.finisher.saveSettings({ ...settings }).catch(() => {});
+}
+
+// SOP parameter buttons
+document.getElementById('sopPlanetUp').addEventListener('click', () => adjustSetting('sopPlanetRpm', 10, 0, 1000));
+document.getElementById('sopPlanetDown').addEventListener('click', () => adjustSetting('sopPlanetRpm', -10, 0, 1000));
+document.getElementById('sopCentralUp').addEventListener('click', () => adjustSetting('sopCentralRpm', 10, 0, 1000));
+document.getElementById('sopCentralDown').addEventListener('click', () => adjustSetting('sopCentralRpm', -10, 0, 1000));
+document.getElementById('sopVibUp').addEventListener('click', () => adjustSetting('sopVib', 5, 0, 100));
+document.getElementById('sopVibDown').addEventListener('click', () => adjustSetting('sopVib', -5, 0, 100));
+document.getElementById('sopTimeUp').addEventListener('click', () => adjustSetting('sopTimeMins', 10, 10, 600));
+document.getElementById('sopTimeDown').addEventListener('click', () => adjustSetting('sopTimeMins', -10, 10, 600));
+
+// Abrasive duration buttons
+document.getElementById('abrasiveHoursUp').addEventListener('click', () => adjustSetting('abrasiveHours', 1, 1, 48));
+document.getElementById('abrasiveHoursDown').addEventListener('click', () => adjustSetting('abrasiveHours', -1, 1, 48));
+
+// Manual abrasive reset
+document.getElementById('resetAbrasiveBtn').addEventListener('click', resetAbrasiveTimer);
 
 // ============================================================
 //  Tab switching
@@ -267,6 +324,7 @@ for (const tab of document.querySelectorAll('.tab')) {
     document.querySelectorAll('.tab-content').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+    if (tab.dataset.tab === 'settings') renderSettings();
   });
 }
 
@@ -287,12 +345,22 @@ for (const el of document.querySelectorAll('.spin')) {
 // ============================================================
 //  Timer tick (1 second)
 // ============================================================
+let abrasiveSaveCounter = 0;
+
 setInterval(() => {
   if ((state.running && !state.paused) && state.countdownMs > 0) {
     state.countdownMs = Math.max(0, state.countdownMs - 1000);
     state.abrasiveMs  = Math.max(0, state.abrasiveMs - 1000);
 
+    // Save abrasive timer to disk every 30 seconds of run time
+    abrasiveSaveCounter++;
+    if (abrasiveSaveCounter >= 30) {
+      abrasiveSaveCounter = 0;
+      window.finisher.saveAbrasiveMs(state.abrasiveMs).catch(() => {});
+    }
+
     if (state.abrasiveMs === 0 && !abrasiveLocked) {
+      window.finisher.saveAbrasiveMs(0).catch(() => {});
       showAbrasivePopup();
       return;
     }
@@ -346,7 +414,30 @@ window.finisher.serial.onConnectionChange((info) => {
 });
 
 (async () => {
-  try { await window.finisher.serial.autoConnect(); } catch {}
-})();
+  // Load persisted settings
+  try {
+    const saved = await window.finisher.loadSettings();
+    if (saved) {
+      if (typeof saved.sopPlanetRpm === 'number')  settings.sopPlanetRpm  = saved.sopPlanetRpm;
+      if (typeof saved.sopCentralRpm === 'number') settings.sopCentralRpm = saved.sopCentralRpm;
+      if (typeof saved.sopVib === 'number')        settings.sopVib        = saved.sopVib;
+      if (typeof saved.sopTimeMins === 'number')   settings.sopTimeMins   = saved.sopTimeMins;
+      if (typeof saved.abrasiveHours === 'number') settings.abrasiveHours = saved.abrasiveHours;
+    }
+  } catch {}
 
-render();
+  // Load persisted abrasive timer
+  try {
+    const saved = await window.finisher.loadAbrasiveMs();
+    if (typeof saved === 'number' && saved >= 0) {
+      state.abrasiveMs = saved;
+      if (saved === 0) showAbrasivePopup();
+    }
+  } catch {}
+
+  // Auto-connect serial
+  try { await window.finisher.serial.autoConnect(); } catch {}
+
+  render();
+  renderSettings();
+})();

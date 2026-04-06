@@ -79,6 +79,45 @@ ipcMain.handle('serial:getConnectionInfo', async () => {
   return serial.getConnectionInfo();
 });
 
+// ---- Settings persistence ----
+const settingsFilePath = path.join(app.getPath('userData'), 'app-settings.json');
+
+ipcMain.handle('app:loadSettings', async () => {
+  try {
+    if (fs.existsSync(settingsFilePath)) {
+      return JSON.parse(fs.readFileSync(settingsFilePath, 'utf8'));
+    }
+  } catch {}
+  return null;
+});
+
+ipcMain.handle('app:saveSettings', async (_evt, settings) => {
+  try {
+    fs.writeFileSync(settingsFilePath, JSON.stringify(settings, null, 2), 'utf8');
+  } catch {}
+  return true;
+});
+
+// ---- Abrasive timer persistence ----
+const abrasiveFilePath = path.join(app.getPath('userData'), 'abrasive-timer.json');
+
+ipcMain.handle('app:loadAbrasiveMs', async () => {
+  try {
+    if (fs.existsSync(abrasiveFilePath)) {
+      const data = JSON.parse(fs.readFileSync(abrasiveFilePath, 'utf8'));
+      if (typeof data.abrasiveMs === 'number') return data.abrasiveMs;
+    }
+  } catch {}
+  return null;
+});
+
+ipcMain.handle('app:saveAbrasiveMs', async (_evt, ms) => {
+  try {
+    fs.writeFileSync(abrasiveFilePath, JSON.stringify({ abrasiveMs: ms }), 'utf8');
+  } catch {}
+  return true;
+});
+
 ipcMain.handle('app:saveCsv', async (_evt, csvString, suggestedName) => {
   const docsDir = path.join(os.homedir(), 'Documents');
   const saveDir = fs.existsSync(docsDir) ? docsDir : os.homedir();

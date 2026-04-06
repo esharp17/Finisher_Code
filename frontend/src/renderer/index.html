@@ -17,6 +17,7 @@
         <div class="tab-bar">
           <button class="tab active" data-tab="control">Control</button>
           <button class="tab" data-tab="log">Data Log</button>
+          <button class="tab" data-tab="settings">Settings</button>
         </div>
       </header>
 
@@ -99,6 +100,66 @@
             </thead>
             <tbody id="logBody"></tbody>
           </table>
+        </div>
+      </main>
+
+      <!-- ===== SETTINGS TAB ===== -->
+      <main class="panel tab-content" id="tab-settings">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <div class="settings-heading">SOP Parameters</div>
+            <div class="setting-row">
+              <label>Planet RPM</label>
+              <div class="setting-ctrl">
+                <button class="spin" id="sopPlanetDown">&#9660;</button>
+                <span class="setting-val" id="sopPlanetVal">300</span>
+                <button class="spin" id="sopPlanetUp">&#9650;</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label>Central RPM</label>
+              <div class="setting-ctrl">
+                <button class="spin" id="sopCentralDown">&#9660;</button>
+                <span class="setting-val" id="sopCentralVal">280</span>
+                <button class="spin" id="sopCentralUp">&#9650;</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label>Vibration %</label>
+              <div class="setting-ctrl">
+                <button class="spin" id="sopVibDown">&#9660;</button>
+                <span class="setting-val" id="sopVibVal">33</span>
+                <button class="spin" id="sopVibUp">&#9650;</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label>Duration (min)</label>
+              <div class="setting-ctrl">
+                <button class="spin" id="sopTimeDown">&#9660;</button>
+                <span class="setting-val" id="sopTimeVal">180</span>
+                <button class="spin" id="sopTimeUp">&#9650;</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-heading">Abrasive Timer</div>
+            <div class="setting-row">
+              <label>Duration (hours)</label>
+              <div class="setting-ctrl">
+                <button class="spin" id="abrasiveHoursDown">&#9660;</button>
+                <span class="setting-val" id="abrasiveHoursVal">12</span>
+                <button class="spin" id="abrasiveHoursUp">&#9650;</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label>Remaining</label>
+              <span class="setting-val" id="abrasiveRemaining">12:00:00</span>
+            </div>
+            <div class="setting-row">
+              <button class="btn btn-dark btn-sm" id="resetAbrasiveBtn">Reset Abrasive Timer Now</button>
+            </div>
+          </div>
         </div>
       </main>
 

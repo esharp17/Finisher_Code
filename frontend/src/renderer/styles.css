@@ -268,6 +268,59 @@ html, body {
 
 .log-table tr:nth-child(even) { background: #f7f7f7; }
 
+/* ===== SETTINGS TAB ===== */
+.settings-grid {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0;
+}
+
+.settings-section {
+  flex: 1;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(0,0,0,0.18);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.settings-heading {
+  font-size: 13px;
+  font-weight: 800;
+  color: #222;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(0,0,0,0.15);
+  padding-bottom: 4px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.setting-row label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #333;
+}
+
+.setting-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.setting-val {
+  font-size: 15px;
+  font-weight: 800;
+  color: #111;
+  min-width: 50px;
+  text-align: center;
+}
+
 /* ===== ABRASIVE CHANGE OVERLAY ===== */
 .overlay {
   display: none;

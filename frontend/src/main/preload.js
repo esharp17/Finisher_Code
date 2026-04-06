@@ -3,6 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('finisher', {
   getVersion: () => ipcRenderer.invoke('app:getVersion'),
   saveCsv: (csvString, fileName) => ipcRenderer.invoke('app:saveCsv', csvString, fileName),
+  loadAbrasiveMs: () => ipcRenderer.invoke('app:loadAbrasiveMs'),
+  saveAbrasiveMs: (ms) => ipcRenderer.invoke('app:saveAbrasiveMs', ms),
+  loadSettings: () => ipcRenderer.invoke('app:loadSettings'),
+  saveSettings: (s) => ipcRenderer.invoke('app:saveSettings', s),
   serial: {
     listPorts: () => ipcRenderer.invoke('serial:listPorts'),
     autoConnect: () => ipcRenderer.invoke('serial:autoConnect'),

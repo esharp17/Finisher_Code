@@ -156,7 +156,7 @@ ipcMain.handle('app:updateApp', async () => {
 
     // 2) npm install (in case package.json changed)
     if (!alreadyUpToDate) {
-      const installResult = await runCmd(npm, ['install', '--production'], frontendDir);
+      const installResult = await runCmd(npm, ['install'], frontendDir);
       console.log('[UPDATE] npm install:', installResult);
     }
 

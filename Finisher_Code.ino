@@ -1,5 +1,10 @@
 // ============================================================
-//  Finisher Controller – AccelStepper w/ DM556 Drivers
+//  Finisher Controller – AccelStepper Position-Mode w/ DM556
+//
+//  Uses the same proven motor control pattern as the working
+//  test sketch: run() + setMaxSpeed() + setAcceleration() +
+//  moveTo().  Acceleration is computed from the ramp time so
+//  that speed changes are always smooth.
 //
 //  Motors:
 //    Planetary 1 (NEMA 17) : PUL+ = D6,  DIR+ = D7
@@ -19,7 +24,6 @@
 //    resume             – ramp back to saved targets
 //    cancel             – full stop + clear targets
 //    sop                – Standard Operating Procedure
-//                         (planet 300, central 280, 3h timer)
 //    status             – print current state (also auto every 500ms)
 // ============================================================
 
@@ -39,8 +43,10 @@
 // ---------- Motor Specs ----------
 #define STEPS_PER_REV  200
 
-// ---------- Ramp ----------
-float RAMP_TIME_SECONDS = 5.0f;
+// ---------- Ramp Time ----------
+// How many seconds for a 0→max speed ramp.  Smaller changes
+// use proportionally shorter times (minimum 2 s).
+float RAMP_TIME_SECONDS = 8.0f;
 
 // ---------- AccelStepper Instances ----------
 AccelStepper planetary1(AccelStepper::DRIVER, PLANETARY1_PUL, PLANETARY1_DIR);
@@ -48,13 +54,11 @@ AccelStepper planetary2(AccelStepper::DRIVER, PLANETARY2_PUL, PLANETARY2_DIR);
 AccelStepper central   (AccelStepper::DRIVER, CENTRAL_PUL,    CENTRAL_DIR);
 
 // ---------- Global State ----------
-float  targetPlanetRPM  = 0.0f;
-float  targetCentralRPM = 0.0f;
-float  currentPlanetRPM = 0.0f;
-float  currentCentralRPM = 0.0f;
+float  targetPlanetRPM   = 0.0f;
+float  targetCentralRPM  = 0.0f;
 
-uint8_t vibPercent   = 0;
-bool    vibRunning   = false;
+uint8_t vibPercent = 0;
+bool    vibRunning = false;
 
 bool systemRunning = false;
 bool systemPaused  = false;
@@ -64,17 +68,21 @@ bool sopActive     = false;
 float savedPlanetRPM  = 0.0f;
 float savedCentralRPM = 0.0f;
 
-// ---------- Ramp State ----------
-bool  rampPlanetActive  = false;
-bool  rampCentralActive = false;
-float p_startRPM = 0, p_goalRPM = 0;
-float c_startRPM = 0, c_goalRPM = 0;
-unsigned long p_rampStartMs = 0;
-unsigned long c_rampStartMs = 0;
-
 // ---------- Status Reporting ----------
 unsigned long lastStatusMs = 0;
 const unsigned long STATUS_PERIOD_MS = 500;
+
+// ============================================================
+//  Helpers
+// ============================================================
+float rpmToSps(float rpm) {
+  return (rpm / 60.0f) * STEPS_PER_REV;
+}
+
+float absSpeed(AccelStepper& m) {
+  float s = m.speed();
+  return s < 0.0f ? -s : s;
+}
 
 // ============================================================
 //  Vibration Motor
@@ -93,92 +101,56 @@ void setVibration(bool enable) {
 }
 
 // ============================================================
-//  Stepper Helpers
+//  Motor Speed Application
+//  Uses the same pattern as the proven test sketch:
+//    setAcceleration → setMaxSpeed → moveTo(far target)
+//  AccelStepper handles the smooth acceleration internally.
 // ============================================================
-float rpmToSps(float rpm) {
-  return (rpm / 60.0f) * STEPS_PER_REV;
+void applyMotorSpeed(AccelStepper& motor, float newSps) {
+  float currentSps = absSpeed(motor);
+  float delta = newSps - currentSps;
+  if (delta < 0.0f) delta = -delta;
+
+  // Calculate acceleration from ramp time
+  float accel = (delta > 0.0f && RAMP_TIME_SECONDS > 0.0f)
+                ? delta / RAMP_TIME_SECONDS
+                : 10.0f;
+  if (accel < 10.0f) accel = 10.0f;
+
+  motor.setAcceleration(accel);
+
+  if (newSps < 1.0f) {
+    // Ramp down to stop
+    motor.setMaxSpeed(max(absSpeed(motor), 1.0f));
+    motor.moveTo(motor.currentPosition());
+  } else {
+    motor.setMaxSpeed(newSps);
+    motor.moveTo((long)2000000000L);
+  }
 }
 
 void applyPlanetSpeed(float rpm) {
-  float spd = rpmToSps(rpm);
-  float acc = (spd > 0 && RAMP_TIME_SECONDS > 0) ? spd / RAMP_TIME_SECONDS : 100.0f;
-  if (acc < 10.0f) acc = 10.0f;
-
-  planetary1.setMaxSpeed(spd > 0 ? spd : 1);
-  planetary1.setAcceleration(acc);
-  planetary1.moveTo((long)2000000000L);
-
-  planetary2.setMaxSpeed(spd > 0 ? spd : 1);
-  planetary2.setAcceleration(acc);
-  planetary2.moveTo((long)2000000000L);
+  float sps = rpmToSps(rpm);
+  applyMotorSpeed(planetary1, sps);
+  applyMotorSpeed(planetary2, sps);
 }
 
 void applyCentralSpeed(float rpm) {
-  float spd = rpmToSps(rpm);
-  float acc = (spd > 0 && RAMP_TIME_SECONDS > 0) ? spd / RAMP_TIME_SECONDS : 100.0f;
-  if (acc < 10.0f) acc = 10.0f;
-
-  central.setMaxSpeed(spd > 0 ? spd : 1);
-  central.setAcceleration(acc);
-  central.moveTo((long)2000000000L);
-}
-
-void startRampPlanet(float fromRPM, float toRPM) {
-  p_startRPM = fromRPM;
-  p_goalRPM  = toRPM;
-  p_rampStartMs = millis();
-  rampPlanetActive = true;
-}
-
-void startRampCentral(float fromRPM, float toRPM) {
-  c_startRPM = fromRPM;
-  c_goalRPM  = toRPM;
-  c_rampStartMs = millis();
-  rampCentralActive = true;
-}
-
-void updateRamps() {
-  unsigned long now = millis();
-
-  if (rampPlanetActive) {
-    float t = (now - p_rampStartMs) / 1000.0f / RAMP_TIME_SECONDS;
-    if (t >= 1.0f) {
-      rampPlanetActive = false;
-      currentPlanetRPM = p_goalRPM;
-    } else {
-      currentPlanetRPM = p_startRPM + (p_goalRPM - p_startRPM) * t;
-    }
-    applyPlanetSpeed(currentPlanetRPM);
-  }
-
-  if (rampCentralActive) {
-    float t = (now - c_rampStartMs) / 1000.0f / RAMP_TIME_SECONDS;
-    if (t >= 1.0f) {
-      rampCentralActive = false;
-      currentCentralRPM = c_goalRPM;
-    } else {
-      currentCentralRPM = c_startRPM + (c_goalRPM - c_startRPM) * t;
-    }
-    applyCentralSpeed(currentCentralRPM);
-  }
+  float sps = rpmToSps(rpm);
+  applyMotorSpeed(central, sps);
 }
 
 void rampToTargets() {
-  startRampPlanet(currentPlanetRPM, targetPlanetRPM);
-  startRampCentral(currentCentralRPM, targetCentralRPM);
+  applyPlanetSpeed(targetPlanetRPM);
+  applyCentralSpeed(targetCentralRPM);
 }
 
 void rampToZero() {
-  startRampPlanet(currentPlanetRPM, 0.0f);
-  startRampCentral(currentCentralRPM, 0.0f);
+  applyPlanetSpeed(0.0f);
+  applyCentralSpeed(0.0f);
 }
 
 void immediateStop() {
-  rampPlanetActive  = false;
-  rampCentralActive = false;
-  currentPlanetRPM  = 0.0f;
-  currentCentralRPM = 0.0f;
-
   planetary1.setMaxSpeed(1);
   planetary1.moveTo(planetary1.currentPosition());
   planetary2.setMaxSpeed(1);
@@ -198,16 +170,21 @@ void emitStatusLine() {
   lastStatusMs = now;
 
   const char* st = "IDLE";
-  if (systemPaused) st = "PAUSED";
-  else if (sopActive) st = "SOP";
+  if (systemPaused)       st = "PAUSED";
+  else if (sopActive)     st = "SOP";
   else if (systemRunning) st = "RUNNING";
+
+  float curPlanet  = absSpeed(planetary1);
+  float curCentral = absSpeed(central);
+  float curPlanetRPM  = (curPlanet  / STEPS_PER_REV) * 60.0f;
+  float curCentralRPM = (curCentral / STEPS_PER_REV) * 60.0f;
 
   Serial.print("STATUS state=");
   Serial.print(st);
   Serial.print(" planetRPM=");
-  Serial.print(currentPlanetRPM, 1);
+  Serial.print(curPlanetRPM, 1);
   Serial.print(" centralRPM=");
-  Serial.print(currentCentralRPM, 1);
+  Serial.print(curCentralRPM, 1);
   Serial.print(" targetPlanetRPM=");
   Serial.print(targetPlanetRPM, 1);
   Serial.print(" targetCentralRPM=");
@@ -234,9 +211,9 @@ void parseCommand(String cmd) {
     if (rpm < 0) rpm = 0;
     targetPlanetRPM = rpm;
     if (systemRunning && !systemPaused) {
-      startRampPlanet(currentPlanetRPM, targetPlanetRPM);
+      applyPlanetSpeed(targetPlanetRPM);
     }
-    Serial.print("[CMD] Planet RPM → ");
+    Serial.print("[CMD] Planet RPM -> ");
     Serial.println(targetPlanetRPM);
     return;
   }
@@ -247,9 +224,9 @@ void parseCommand(String cmd) {
     if (rpm < 0) rpm = 0;
     targetCentralRPM = rpm;
     if (systemRunning && !systemPaused) {
-      startRampCentral(currentCentralRPM, targetCentralRPM);
+      applyCentralSpeed(targetCentralRPM);
     }
-    Serial.print("[CMD] Central RPM → ");
+    Serial.print("[CMD] Central RPM -> ");
     Serial.println(targetCentralRPM);
     return;
   }
@@ -261,7 +238,7 @@ void parseCommand(String cmd) {
     if (val > 100) val = 100;
     vibPercent = (uint8_t)val;
     if (vibRunning) setVibration(true);
-    Serial.print("[CMD] Vib → ");
+    Serial.print("[CMD] Vib -> ");
     Serial.print(vibPercent);
     Serial.println("%");
     return;
@@ -364,12 +341,12 @@ void setup() {
   analogWrite(VIB_RPWM, 0);
   digitalWrite(VIB_LPWM, LOW);
 
-  planetary1.setMaxSpeed(1);
-  planetary1.setAcceleration(10);
-  planetary2.setMaxSpeed(1);
-  planetary2.setAcceleration(10);
-  central.setMaxSpeed(1);
-  central.setAcceleration(10);
+  for (int i = 0; i < 3; i++) {
+    AccelStepper* m = (i == 0) ? &planetary1 : (i == 1) ? &planetary2 : &central;
+    m->setMaxSpeed(1);
+    m->setAcceleration(10);
+    m->moveTo(2000000000L);
+  }
 
   Serial.println(F("========================================"));
   Serial.println(F("  Finisher Controller Ready"));
@@ -384,7 +361,6 @@ void loop() {
   planetary2.run();
   central.run();
 
-  updateRamps();
   emitStatusLine();
 
   static String buf = "";

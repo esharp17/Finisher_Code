@@ -57,14 +57,21 @@ function stateLabel() {
 }
 
 // ============================================================
-//  Serial
+//  Serial (queued to avoid interleaving rapid commands)
 // ============================================================
-async function sendCommand(cmd) {
-  try {
-    await window.finisher.serial.sendLine(cmd);
-  } catch {
-    // UI works in demo mode if disconnected
-  }
+let _cmdQueue = Promise.resolve();
+
+function sendCommand(cmd) {
+  _cmdQueue = _cmdQueue.then(async () => {
+    try {
+      console.log(`[UI TX] ${cmd}`);
+      await window.finisher.serial.sendLine(cmd);
+      // small gap so Arduino serial buffer can process each line
+      await new Promise(r => setTimeout(r, 50));
+    } catch {
+      // UI works in demo mode if disconnected
+    }
+  });
 }
 
 // ============================================================
@@ -77,6 +84,15 @@ function render() {
   document.getElementById('timeVal').textContent = state.timeMins;
   document.getElementById('mainTimer').textContent = formatMMSS(state.countdownMs);
   document.getElementById('abrasiveTimer').textContent = formatHHMMSS(state.abrasiveMs);
+
+  const connEl = document.getElementById('connStatus');
+  if (state.connected) {
+    connEl.textContent = '\u25CF Connected';
+    connEl.className = 'conn-status connected';
+  } else {
+    connEl.textContent = '\u25CF Disconnected';
+    connEl.className = 'conn-status';
+  }
 
   const startBtn = document.getElementById('startBtn');
   const pauseBtn = document.getElementById('pauseBtn');

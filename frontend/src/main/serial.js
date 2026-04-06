@@ -62,11 +62,16 @@ class SerialManager {
       this._port.open((err) => (err ? reject(err) : resolve()));
     });
 
+    console.log(`[SERIAL] Connected to ${portPath} @ ${baudRate}`);
+
+    // Wait for Arduino bootloader reset to complete
+    await new Promise((r) => setTimeout(r, 2500));
+
     this._parser = this._port.pipe(new ReadlineParser({ delimiter: '\n' }));
     this._parser.on('data', (line) => {
       const trimmed = String(line).trim();
       if (!trimmed) return;
-
+      console.log(`[SERIAL RX] ${trimmed}`);
       if (this._onLine) this._onLine(trimmed);
     });
 
@@ -106,8 +111,12 @@ class SerialManager {
     }
 
     const payload = `${text}\n`;
+    console.log(`[SERIAL TX] ${text}`);
     await new Promise((resolve, reject) => {
       this._port.write(payload, (err) => (err ? reject(err) : resolve()));
+    });
+    await new Promise((resolve, reject) => {
+      this._port.drain((err) => (err ? reject(err) : resolve()));
     });
   }
 

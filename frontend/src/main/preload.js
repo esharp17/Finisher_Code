@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('finisher', {
   saveAbrasiveMs: (ms) => ipcRenderer.invoke('app:saveAbrasiveMs', ms),
   loadSettings: () => ipcRenderer.invoke('app:loadSettings'),
   saveSettings: (s) => ipcRenderer.invoke('app:saveSettings', s),
+  updateApp: () => ipcRenderer.invoke('app:updateApp'),
   serial: {
     listPorts: () => ipcRenderer.invoke('serial:listPorts'),
     autoConnect: () => ipcRenderer.invoke('serial:autoConnect'),

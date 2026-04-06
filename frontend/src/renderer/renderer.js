@@ -331,6 +331,34 @@ document.getElementById('abrasiveHoursDown').addEventListener('click', () => adj
 // Manual abrasive reset
 document.getElementById('resetAbrasiveBtn').addEventListener('click', resetAbrasiveTimer);
 
+// Software update button
+document.getElementById('updateAppBtn').addEventListener('click', async () => {
+  const statusEl = document.getElementById('updateStatus');
+  const btn = document.getElementById('updateAppBtn');
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+  statusEl.textContent = 'Pulling from GitHub...';
+  statusEl.style.color = '#ccc';
+
+  try {
+    const result = await window.finisher.updateApp();
+    if (result.success) {
+      statusEl.textContent = 'Update successful — restarting...';
+      statusEl.style.color = '#4caf50';
+    } else {
+      statusEl.textContent = result.message || 'Update failed';
+      statusEl.style.color = '#d94b44';
+      btn.disabled = false;
+      btn.textContent = 'Update & Restart';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + (e.message || 'unknown');
+    statusEl.style.color = '#d94b44';
+    btn.disabled = false;
+    btn.textContent = 'Update & Restart';
+  }
+});
+
 // ============================================================
 //  Tab switching
 // ============================================================

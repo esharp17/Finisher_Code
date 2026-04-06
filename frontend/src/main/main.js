@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execFile } = require('child_process');
 const { SerialManager } = require('./serial');
 
 let mainWindow;
@@ -125,5 +126,48 @@ ipcMain.handle('app:saveCsv', async (_evt, csvString, suggestedName) => {
   fs.writeFileSync(filePath, csvString, 'utf8');
   shell.showItemInFolder(filePath);
   return filePath;
+});
+
+// ---- Update from GitHub & relaunch ----
+// Repo root is one level above the frontend/ directory.
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const frontendDir = path.resolve(__dirname, '..', '..');
+
+function runCmd(cmd, args, cwd) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { cwd, timeout: 120000 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(`${cmd} ${args.join(' ')} failed: ${stderr || err.message}`));
+      resolve(stdout.trim());
+    });
+  });
+}
+
+ipcMain.handle('app:updateApp', async () => {
+  try {
+    const isLinux = process.platform === 'linux';
+    const git = isLinux ? 'git' : 'git';
+    const npm = isLinux ? 'npm' : process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+    // 1) git pull
+    const pullResult = await runCmd(git, ['pull', '--ff-only'], repoRoot);
+    console.log('[UPDATE] git pull:', pullResult);
+
+    const alreadyUpToDate = pullResult.includes('Already up to date') || pullResult.includes('Already up-to-date');
+
+    // 2) npm install (in case package.json changed)
+    if (!alreadyUpToDate) {
+      const installResult = await runCmd(npm, ['install', '--production'], frontendDir);
+      console.log('[UPDATE] npm install:', installResult);
+    }
+
+    // 3) Relaunch
+    app.relaunch();
+    app.exit(0);
+
+    return { success: true, message: pullResult };
+  } catch (e) {
+    console.error('[UPDATE] Error:', e.message);
+    return { success: false, message: e.message };
+  }
 });
 

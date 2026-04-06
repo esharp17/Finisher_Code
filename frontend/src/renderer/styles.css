@@ -366,6 +366,12 @@ html, body {
   margin-bottom: 18px;
 }
 
+.popup-btns {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
 .popup-btn {
   font-size: 18px;
   padding: 10px 40px;

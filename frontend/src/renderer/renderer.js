@@ -328,8 +328,17 @@ document.getElementById('sopTimeDown').addEventListener('click', () => adjustSet
 document.getElementById('abrasiveHoursUp').addEventListener('click', () => adjustSetting('abrasiveHours', 1, 1, 48));
 document.getElementById('abrasiveHoursDown').addEventListener('click', () => adjustSetting('abrasiveHours', -1, 1, 48));
 
-// Manual abrasive reset
-document.getElementById('resetAbrasiveBtn').addEventListener('click', resetAbrasiveTimer);
+// Manual abrasive reset (with confirmation)
+document.getElementById('resetAbrasiveBtn').addEventListener('click', () => {
+  document.getElementById('confirmResetOverlay').classList.add('visible');
+});
+document.getElementById('confirmResetYes').addEventListener('click', () => {
+  document.getElementById('confirmResetOverlay').classList.remove('visible');
+  resetAbrasiveTimer();
+});
+document.getElementById('confirmResetNo').addEventListener('click', () => {
+  document.getElementById('confirmResetOverlay').classList.remove('visible');
+});
 
 // Software update button
 document.getElementById('updateAppBtn').addEventListener('click', async () => {

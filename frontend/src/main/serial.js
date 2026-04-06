@@ -32,6 +32,7 @@ class SerialManager {
     this._port = null;
     this._parser = null;
     this._connectedPath = null;
+    this._validated = false;
     this._settingsPath = path.join(this._userDataDir, 'serial-settings.json');
   }
 
@@ -41,7 +42,7 @@ class SerialManager {
 
   getConnectionInfo() {
     return {
-      connected: Boolean(this._port && this._port.isOpen),
+      connected: Boolean(this._port && this._port.isOpen && this._validated),
       path: this._connectedPath
     };
   }
@@ -62,22 +63,30 @@ class SerialManager {
       this._port.open((err) => (err ? reject(err) : resolve()));
     });
 
-    console.log(`[SERIAL] Connected to ${portPath} @ ${baudRate}`);
+    console.log(`[SERIAL] Opened ${portPath} @ ${baudRate}, waiting for Arduino...`);
 
     // Wait for Arduino bootloader reset to complete
     await new Promise((r) => setTimeout(r, 2500));
 
     this._parser = this._port.pipe(new ReadlineParser({ delimiter: '\n' }));
-    this._parser.on('data', (line) => {
+
+    // Listen for data and track whether we've seen a valid STATUS line
+    let gotStatus = false;
+    const dataHandler = (line) => {
       const trimmed = String(line).trim();
       if (!trimmed) return;
       console.log(`[SERIAL RX] ${trimmed}`);
+      if (trimmed.startsWith('STATUS ') || trimmed.includes('Finisher Controller')) {
+        gotStatus = true;
+      }
       if (this._onLine) this._onLine(trimmed);
-    });
+    };
+    this._parser.on('data', dataHandler);
 
     this._port.on('close', () => {
       this._port = null;
       this._parser = null;
+      this._validated = false;
       this._setConnected(null);
       this._startRetryLoop();
     });
@@ -86,6 +95,32 @@ class SerialManager {
       // let the close handler clear state
     });
 
+    // Send a status request and wait for a valid response
+    try {
+      this._port.write('status\n');
+    } catch {}
+
+    // Wait up to 4 seconds for a STATUS response
+    const deadline = Date.now() + 4000;
+    while (!gotStatus && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    if (!gotStatus) {
+      console.log(`[SERIAL] No Arduino response on ${portPath}, disconnecting.`);
+      try {
+        const p = this._port;
+        this._port = null;
+        this._parser = null;
+        await new Promise((r) => p.close(() => r()));
+      } catch {}
+      this._validated = false;
+      this._setConnected(null);
+      throw new Error(`No Arduino found on ${portPath}`);
+    }
+
+    console.log(`[SERIAL] Arduino verified on ${portPath}`);
+    this._validated = true;
     this._setConnected(portPath);
     safeWriteJson(this._settingsPath, { lastPortPath: portPath, baudRate });
 
@@ -100,6 +135,7 @@ class SerialManager {
 
     this._port = null;
     this._parser = null;
+    this._validated = false;
     this._setConnected(null);
 
     return this.getConnectionInfo();
@@ -149,17 +185,22 @@ class SerialManager {
       }
     }
 
-    // Prefer common Pi serial paths
+    // Prefer common Pi serial paths (ttyACM/ttyUSB are USB-serial devices)
     for (const p of ports) {
       if (p.path && (/ttyACM|ttyUSB/.test(p.path))) {
         candidates.push(p.path);
       }
     }
 
-    // Fall back to first available
+    // On Windows, also try COM ports
     for (const p of ports) {
-      if (p.path) candidates.push(p.path);
+      if (p.path && /^COM\d+$/i.test(p.path)) {
+        candidates.push(p.path);
+      }
     }
+
+    // Do NOT fall back to all ports — avoids connecting to
+    // Pi internal UART (ttyAMA0, ttyS0) or Bluetooth serial.
 
     const unique = [...new Set(candidates)].filter(Boolean);
     for (const portPath of unique) {

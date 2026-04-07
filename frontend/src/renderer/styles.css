@@ -240,6 +240,24 @@ html, body {
 
 .unit { font-size: 9px; font-weight: 700; color: #444; }
 
+.dir-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.dir-btn {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 3px;
+  border: 1px solid rgba(0,0,0,0.2);
+  background: linear-gradient(#e8e8e8, #d0d0d0);
+  cursor: pointer;
+  color: #333;
+}
+.dir-btn:active { transform: translateY(1px); }
+
 /* ===== FOOTER ===== */
 .footer {
   flex-shrink: 0;

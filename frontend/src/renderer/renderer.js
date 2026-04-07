@@ -37,6 +37,16 @@ const state = {
 // Pending SOP-exit adjustment to apply after confirmation
 let _pendingSopAdjust = null;
 
+// Motor directions: 'CW' or 'CCW'
+const dirs = {
+  p1: 'CCW',   // P1 defaults CCW (flipped wiring)
+  p2: 'CW',
+  central: 'CW'
+};
+
+// Track whether we've already reversed at the halfway point this run
+let halfwayReversed = false;
+
 const dataLog = [];
 let runNumber = 0;
 let abrasiveLocked = false;
@@ -112,6 +122,10 @@ function render() {
   document.getElementById('centralVal').textContent = Math.round(goal.centralRpm / 4);
   document.getElementById('vibVal').textContent = goal.vib;
   document.getElementById('timeVal').textContent = goal.timeMins;
+
+  // Direction buttons
+  document.getElementById('dirP1').textContent = dirs.p1;
+  document.getElementById('dirCentral').textContent = dirs.central;
   document.getElementById('mainTimer').textContent = formatMMSS(state.countdownMs);
   document.getElementById('abrasiveTimer').textContent = formatHHMMSS(state.abrasiveMs);
 
@@ -177,6 +191,7 @@ function startRun() {
   runNumber++;
   state.running = true;
   state.paused  = false;
+  halfwayReversed = false;
   state.countdownMs = goal.timeMins * 60 * 1000;
   sendCommand(`prpm ${goal.planetRpm}`);
   sendCommand(`crpm ${goal.centralRpm}`);
@@ -212,6 +227,7 @@ function startSop() {
   state.running   = true;
   state.paused    = false;
   state.sopActive = true;
+  halfwayReversed = false;
   goal.planetRpm  = settings.sopPlanetRpm;
   goal.centralRpm = settings.sopCentralRpm;
   goal.vib        = settings.sopVib;
@@ -471,6 +487,16 @@ for (const el of document.querySelectorAll('.spin')) {
   el.addEventListener('click', () => adjust(el.dataset.target, el.dataset.dir));
 }
 
+// Direction toggle buttons
+function toggleDir(key, cmdPrefix) {
+  dirs[key] = dirs[key] === 'CW' ? 'CCW' : 'CW';
+  sendCommand(`${cmdPrefix} ${dirs[key].toLowerCase()}`);
+  render();
+}
+
+document.getElementById('dirP1').addEventListener('click', () => toggleDir('p1', 'dir1'));
+document.getElementById('dirCentral').addEventListener('click', () => toggleDir('central', 'dirc'));
+
 // ============================================================
 //  Timer tick (1 second)
 // ============================================================
@@ -486,6 +512,17 @@ setInterval(() => {
     if (abrasiveSaveCounter >= 30) {
       abrasiveSaveCounter = 0;
       window.finisher.saveAbrasiveMs(state.abrasiveMs).catch(() => {});
+    }
+
+    // Auto-reverse all stepper directions at the halfway point
+    const totalMs = goal.timeMins * 60 * 1000;
+    if (!halfwayReversed && totalMs > 0 && state.countdownMs <= totalMs / 2) {
+      halfwayReversed = true;
+      sendCommand('reverse');
+      dirs.p1 = dirs.p1 === 'CW' ? 'CCW' : 'CW';
+      dirs.p2 = dirs.p2 === 'CW' ? 'CCW' : 'CW';
+      dirs.central = dirs.central === 'CW' ? 'CCW' : 'CW';
+      addLogEntry('DIRECTION REVERSED (halfway)');
     }
 
     if (state.abrasiveMs === 0 && !abrasiveLocked) {

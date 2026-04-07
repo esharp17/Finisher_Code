@@ -1,10 +1,13 @@
 // ============================================================
 //  Finisher Controller – AccelStepper Position-Mode w/ DM556
 //
-//  Uses the same proven motor control pattern as the working
-//  test sketch: run() + setMaxSpeed() + setAcceleration() +
-//  moveTo().  Acceleration is computed from the ramp time so
-//  that speed changes are always smooth.
+//  Sequential motor ramp-up order:
+//    1. Vibration motor  (instant PWM, brief settle)
+//    2. Planetary 1      (ramp to full speed)
+//    3. Planetary 2      (ramp to full speed)
+//    4. Central          (ramp to full speed)
+//  Each motor reaches target speed before the next one starts.
+//  Ramp-down is reverse order: Central → P2 → P1 → Vibration.
 //
 //  Motors:
 //    Planetary 1 (NEMA 17) : PUL+ = D6,  DIR+ = D7
@@ -18,11 +21,11 @@
 //    prpm <value>       – set planetary RPM (both P1 & P2)
 //    crpm <value>       – set central RPM
 //    vib <0-100>        – set vibration intensity as percentage
-//    start              – ramp motors to current target RPMs
-//    stop               – ramp all to 0, cancel everything
-//    pause              – ramp to 0, hold targets for resume
-//    resume             – ramp back to saved targets
-//    cancel             – full stop + clear targets
+//    start              – sequential ramp-up to current targets
+//    stop               – sequential ramp-down, cancel everything
+//    pause              – sequential ramp-down, hold targets
+//    resume             – sequential ramp-up to saved targets
+//    cancel             – immediate stop + clear targets
 //    sop                – Standard Operating Procedure
 //    status             – print current state (also auto every 500ms)
 // ============================================================
@@ -44,9 +47,12 @@
 #define STEPS_PER_REV  200
 
 // ---------- Ramp Time ----------
-// How many seconds for a 0→max speed ramp.  Smaller changes
-// use proportionally shorter times (minimum 2 s).
 float RAMP_TIME_SECONDS = 8.0f;
+
+// ---------- Settle Threshold ----------
+// Motor is "at speed" when within this fraction of target
+#define SETTLE_FRACTION  0.02f
+#define SETTLE_ABS_MIN   3.0f
 
 // ---------- AccelStepper Instances ----------
 AccelStepper planetary1(AccelStepper::DRIVER, PLANETARY1_PUL, PLANETARY1_DIR);
@@ -67,6 +73,27 @@ bool sopActive     = false;
 // Saved targets for pause/resume
 float savedPlanetRPM  = 0.0f;
 float savedCentralRPM = 0.0f;
+
+// ---------- Sequential Ramp Sequencer ----------
+// Ramp-up:   VIB → P1 → P2 → CENTRAL → DONE
+// Ramp-down: CENTRAL → P2 → P1 → VIB → DONE
+enum SeqStage {
+  SEQ_IDLE,
+  SEQ_VIB,
+  SEQ_P1,
+  SEQ_P2,
+  SEQ_CENTRAL,
+  SEQ_DONE
+};
+
+enum SeqDir { SEQ_UP, SEQ_DOWN };
+
+SeqStage  seqStage = SEQ_IDLE;
+SeqDir    seqDir   = SEQ_UP;
+unsigned long seqStageStartMs = 0;
+
+// Vibration settle time (ms) — vib is instant PWM, just a brief pause
+#define VIB_SETTLE_MS 500
 
 // ---------- Status Reporting ----------
 unsigned long lastStatusMs = 0;
@@ -102,16 +129,14 @@ void setVibration(bool enable) {
 
 // ============================================================
 //  Motor Speed Application
-//  Uses the same pattern as the proven test sketch:
+//  Uses the proven test sketch pattern:
 //    setAcceleration → setMaxSpeed → moveTo(far target)
-//  AccelStepper handles the smooth acceleration internally.
 // ============================================================
 void applyMotorSpeed(AccelStepper& motor, float newSps) {
   float currentSps = absSpeed(motor);
   float delta = newSps - currentSps;
   if (delta < 0.0f) delta = -delta;
 
-  // Calculate acceleration from ramp time
   float accel = (delta > 0.0f && RAMP_TIME_SECONDS > 0.0f)
                 ? delta / RAMP_TIME_SECONDS
                 : 10.0f;
@@ -120,7 +145,6 @@ void applyMotorSpeed(AccelStepper& motor, float newSps) {
   motor.setAcceleration(accel);
 
   if (newSps < 1.0f) {
-    // Ramp down to stop
     motor.setMaxSpeed(max(absSpeed(motor), 1.0f));
     motor.moveTo(motor.currentPosition());
   } else {
@@ -129,25 +153,19 @@ void applyMotorSpeed(AccelStepper& motor, float newSps) {
   }
 }
 
-void applyPlanetSpeed(float rpm) {
-  float sps = rpmToSps(rpm);
-  applyMotorSpeed(planetary1, sps);
-  applyMotorSpeed(planetary2, sps);
-}
-
-void applyCentralSpeed(float rpm) {
-  float sps = rpmToSps(rpm);
-  applyMotorSpeed(central, sps);
-}
-
-void rampToTargets() {
-  applyPlanetSpeed(targetPlanetRPM);
-  applyCentralSpeed(targetCentralRPM);
-}
-
-void rampToZero() {
-  applyPlanetSpeed(0.0f);
-  applyCentralSpeed(0.0f);
+// ============================================================
+//  Motor Settled Check
+//  Returns true when motor is within threshold of target speed.
+//  For stopping (targetSps == 0), returns true when speed < min.
+// ============================================================
+bool motorSettled(AccelStepper& motor, float targetSps) {
+  float cur = absSpeed(motor);
+  if (targetSps < 1.0f) {
+    return cur < SETTLE_ABS_MIN;
+  }
+  float threshold = targetSps * SETTLE_FRACTION;
+  if (threshold < SETTLE_ABS_MIN) threshold = SETTLE_ABS_MIN;
+  return cur >= (targetSps - threshold);
 }
 
 void immediateStop() {
@@ -157,8 +175,114 @@ void immediateStop() {
   planetary2.moveTo(planetary2.currentPosition());
   central.setMaxSpeed(1);
   central.moveTo(central.currentPosition());
-
   setVibration(false);
+  seqStage = SEQ_IDLE;
+}
+
+// ============================================================
+//  Sequential Ramp Sequencer
+// ============================================================
+void beginSequence(SeqDir dir) {
+  seqDir = dir;
+  seqStageStartMs = millis();
+
+  if (dir == SEQ_UP) {
+    // Start with vibration
+    seqStage = SEQ_VIB;
+    setVibration(true);
+    Serial.println(F("[SEQ] Ramp UP: vibration on..."));
+  } else {
+    // Ramp down: start with central
+    seqStage = SEQ_CENTRAL;
+    applyMotorSpeed(central, 0.0f);
+    Serial.println(F("[SEQ] Ramp DOWN: central decelerating..."));
+  }
+}
+
+void sequencerTick() {
+  if (seqStage == SEQ_IDLE || seqStage == SEQ_DONE) return;
+
+  unsigned long elapsed = millis() - seqStageStartMs;
+
+  if (seqDir == SEQ_UP) {
+    // ---- RAMP UP: VIB → P1 → P2 → CENTRAL ----
+    switch (seqStage) {
+      case SEQ_VIB:
+        if (elapsed >= VIB_SETTLE_MS) {
+          seqStage = SEQ_P1;
+          seqStageStartMs = millis();
+          applyMotorSpeed(planetary1, rpmToSps(targetPlanetRPM));
+          Serial.println(F("[SEQ] Ramp UP: planetary 1 accelerating..."));
+        }
+        break;
+
+      case SEQ_P1:
+        if (motorSettled(planetary1, rpmToSps(targetPlanetRPM))) {
+          seqStage = SEQ_P2;
+          seqStageStartMs = millis();
+          applyMotorSpeed(planetary2, rpmToSps(targetPlanetRPM));
+          Serial.println(F("[SEQ] Ramp UP: planetary 2 accelerating..."));
+        }
+        break;
+
+      case SEQ_P2:
+        if (motorSettled(planetary2, rpmToSps(targetPlanetRPM))) {
+          seqStage = SEQ_CENTRAL;
+          seqStageStartMs = millis();
+          applyMotorSpeed(central, rpmToSps(targetCentralRPM));
+          Serial.println(F("[SEQ] Ramp UP: central accelerating..."));
+        }
+        break;
+
+      case SEQ_CENTRAL:
+        if (motorSettled(central, rpmToSps(targetCentralRPM))) {
+          seqStage = SEQ_DONE;
+          Serial.println(F("[SEQ] All motors at target speed."));
+        }
+        break;
+
+      default: break;
+    }
+  } else {
+    // ---- RAMP DOWN: CENTRAL → P2 → P1 → VIB ----
+    switch (seqStage) {
+      case SEQ_CENTRAL:
+        if (motorSettled(central, 0.0f)) {
+          seqStage = SEQ_P2;
+          seqStageStartMs = millis();
+          applyMotorSpeed(planetary2, 0.0f);
+          Serial.println(F("[SEQ] Ramp DOWN: planetary 2 decelerating..."));
+        }
+        break;
+
+      case SEQ_P2:
+        if (motorSettled(planetary2, 0.0f)) {
+          seqStage = SEQ_P1;
+          seqStageStartMs = millis();
+          applyMotorSpeed(planetary1, 0.0f);
+          Serial.println(F("[SEQ] Ramp DOWN: planetary 1 decelerating..."));
+        }
+        break;
+
+      case SEQ_P1:
+        if (motorSettled(planetary1, 0.0f)) {
+          seqStage = SEQ_VIB;
+          seqStageStartMs = millis();
+          setVibration(false);
+          Serial.println(F("[SEQ] Ramp DOWN: vibration off."));
+        }
+        break;
+
+      case SEQ_VIB:
+        if (elapsed >= VIB_SETTLE_MS) {
+          seqStage = SEQ_DONE;
+          Serial.println(F("[SEQ] All motors stopped."));
+        }
+        break;
+
+      default: break;
+    }
+  }
 }
 
 // ============================================================
@@ -210,8 +334,10 @@ void parseCommand(String cmd) {
     float rpm = cmd.substring(5).toFloat();
     if (rpm < 0) rpm = 0;
     targetPlanetRPM = rpm;
-    if (systemRunning && !systemPaused) {
-      applyPlanetSpeed(targetPlanetRPM);
+    // If running and sequencer is done, apply immediately
+    if (systemRunning && !systemPaused && seqStage == SEQ_DONE) {
+      applyMotorSpeed(planetary1, rpmToSps(targetPlanetRPM));
+      applyMotorSpeed(planetary2, rpmToSps(targetPlanetRPM));
     }
     Serial.print("[CMD] Planet RPM -> ");
     Serial.println(targetPlanetRPM);
@@ -223,8 +349,9 @@ void parseCommand(String cmd) {
     float rpm = cmd.substring(5).toFloat();
     if (rpm < 0) rpm = 0;
     targetCentralRPM = rpm;
-    if (systemRunning && !systemPaused) {
-      applyCentralSpeed(targetCentralRPM);
+    // If running and sequencer is done, apply immediately
+    if (systemRunning && !systemPaused && seqStage == SEQ_DONE) {
+      applyMotorSpeed(central, rpmToSps(targetCentralRPM));
     }
     Serial.print("[CMD] Central RPM -> ");
     Serial.println(targetCentralRPM);
@@ -248,9 +375,8 @@ void parseCommand(String cmd) {
   if (cmd == "start") {
     systemRunning = true;
     systemPaused  = false;
-    rampToTargets();
-    setVibration(true);
-    Serial.println("[CMD] START");
+    beginSequence(SEQ_UP);
+    Serial.println("[CMD] START (sequential ramp-up)");
     return;
   }
 
@@ -261,9 +387,8 @@ void parseCommand(String cmd) {
     sopActive     = false;
     targetPlanetRPM  = 0.0f;
     targetCentralRPM = 0.0f;
-    rampToZero();
-    setVibration(false);
-    Serial.println("[CMD] STOP");
+    beginSequence(SEQ_DOWN);
+    Serial.println("[CMD] STOP (sequential ramp-down)");
     return;
   }
 
@@ -273,9 +398,8 @@ void parseCommand(String cmd) {
       systemPaused = true;
       savedPlanetRPM  = targetPlanetRPM;
       savedCentralRPM = targetCentralRPM;
-      rampToZero();
-      setVibration(false);
-      Serial.println("[CMD] PAUSED");
+      beginSequence(SEQ_DOWN);
+      Serial.println("[CMD] PAUSED (sequential ramp-down)");
     }
     return;
   }
@@ -286,9 +410,8 @@ void parseCommand(String cmd) {
       systemPaused = false;
       targetPlanetRPM  = savedPlanetRPM;
       targetCentralRPM = savedCentralRPM;
-      rampToTargets();
-      setVibration(true);
-      Serial.println("[CMD] RESUMED");
+      beginSequence(SEQ_UP);
+      Serial.println("[CMD] RESUMED (sequential ramp-up)");
     }
     return;
   }
@@ -303,7 +426,7 @@ void parseCommand(String cmd) {
     savedPlanetRPM   = 0.0f;
     savedCentralRPM  = 0.0f;
     immediateStop();
-    Serial.println("[CMD] CANCELLED");
+    Serial.println("[CMD] CANCELLED (immediate stop)");
     return;
   }
 
@@ -314,9 +437,8 @@ void parseCommand(String cmd) {
     systemPaused  = false;
     targetPlanetRPM  = 300.0f;
     targetCentralRPM = 280.0f;
-    rampToTargets();
-    setVibration(true);
-    Serial.println("[CMD] SOP started (Planet 300, Central 280)");
+    beginSequence(SEQ_UP);
+    Serial.println("[CMD] SOP started (sequential ramp-up)");
     return;
   }
 
@@ -350,6 +472,7 @@ void setup() {
 
   Serial.println(F("========================================"));
   Serial.println(F("  Finisher Controller Ready"));
+  Serial.println(F("  Sequential: VIB -> P1 -> P2 -> Central"));
   Serial.println(F("  Commands: prpm/crpm/vib/start/stop"));
   Serial.println(F("            pause/resume/cancel/sop"));
   Serial.println(F("========================================"));
@@ -361,6 +484,7 @@ void loop() {
   planetary2.run();
   central.run();
 
+  sequencerTick();
   emitStatusLine();
 
   static String buf = "";

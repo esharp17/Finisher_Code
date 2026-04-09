@@ -1,11 +1,11 @@
 // ============================================================
-//  Finisher UI – Renderer
+//  Finisher UI – Renderer (v2 — matches new Arduino sketch)
 // ============================================================
 
 const settings = {
-  sopPlanetRpm: 300,
-  sopCentralRpm: 280,
-  sopVib: 35,
+  sopPlanetRpm: 170,
+  sopCentralRpm: 210,
+  sopVibPwm: 211,
   sopTimeMins: 180,
   abrasiveHours: 12
 };
@@ -14,7 +14,7 @@ const settings = {
 const goal = {
   planetRpm: 0,
   centralRpm: 0,
-  vib: 0,
+  vibPwm: 0,        // 0-255 raw PWM
   timeMins: 0
 };
 
@@ -22,30 +22,23 @@ const goal = {
 const live = {
   planetRpm: 0,
   centralRpm: 0,
-  vib: 0
+  vibPwm: 0
 };
 
 const state = {
   running: false,
-  paused: false,
   sopActive: false,
   countdownMs: 0,
   abrasiveMs: 12 * 60 * 60 * 1000,
-  connected: false
+  connected: false,
+  phase: 'IDLE'   // IDLE, VIB_RAMP, CENTRAL_RAMP, PLANETARY_RAMP, RUNNING
 };
+
+// Vibration direction
+let vibDir = 'F'; // 'F' = forward, 'R' = reverse
 
 // Pending SOP-exit adjustment to apply after confirmation
 let _pendingSopAdjust = null;
-
-// Motor directions: 'CW' or 'CCW'
-const dirs = {
-  p1: 'CCW',   // P1 defaults CCW (flipped wiring)
-  p2: 'CW',
-  central: 'CW'
-};
-
-// Track whether we've already reversed at the halfway point this run
-let halfwayReversed = false;
 
 const dataLog = [];
 let runNumber = 0;
@@ -73,13 +66,6 @@ function timeStamp() {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
-function stateLabel() {
-  if (state.paused) return 'PAUSED';
-  if (state.sopActive) return 'SOP';
-  if (state.running) return 'RUNNING';
-  return 'IDLE';
-}
-
 // ============================================================
 //  Serial (queued to avoid interleaving rapid commands)
 // ============================================================
@@ -90,7 +76,6 @@ function sendCommand(cmd) {
     try {
       console.log(`[UI TX] ${cmd}`);
       await window.finisher.serial.sendLine(cmd);
-      // small gap so Arduino serial buffer can process each line
       await new Promise(r => setTimeout(r, 50));
     } catch {
       // UI works in demo mode if disconnected
@@ -101,17 +86,18 @@ function sendCommand(cmd) {
 // ============================================================
 //  Beacon helpers
 // ============================================================
-const BEACON_TOLERANCE = 5; // RPM or % tolerance for "at speed"
+const BEACON_RPM_TOLERANCE = 10;
+const BEACON_VIB_TOLERANCE = 15;
 
-function beaconClass(goalVal, liveVal) {
-  if (goalVal === 0 && liveVal < BEACON_TOLERANCE) return 'red';
-  if (Math.abs(liveVal - goalVal) <= BEACON_TOLERANCE) return 'green';
+function beaconClass(goalVal, liveVal, tolerance) {
+  if (goalVal === 0 && liveVal < tolerance) return 'red';
+  if (Math.abs(liveVal - goalVal) <= tolerance) return 'green';
   return 'yellow';
 }
 
 function setBeacon(id, cls) {
   const el = document.getElementById(id);
-  el.className = 'beacon ' + cls;
+  if (el) el.className = 'beacon ' + cls;
 }
 
 // ============================================================
@@ -119,21 +105,18 @@ function setBeacon(id, cls) {
 // ============================================================
 function render() {
   document.getElementById('planetVal').textContent = goal.planetRpm;
-  document.getElementById('centralVal').textContent = Math.round(goal.centralRpm / 4);
-  document.getElementById('vibVal').textContent = goal.vib;
+  document.getElementById('centralVal').textContent = goal.centralRpm;
+  document.getElementById('vibVal').textContent = goal.vibPwm;
   document.getElementById('timeVal').textContent = goal.timeMins;
-
-  // Direction buttons
-  document.getElementById('dirP1').textContent = dirs.p1;
-  document.getElementById('dirCentral').textContent = dirs.central;
+  document.getElementById('vibDirBtn').textContent = vibDir === 'F' ? 'FWD' : 'REV';
   document.getElementById('mainTimer').textContent = formatMMSS(state.countdownMs);
   document.getElementById('abrasiveTimer').textContent = formatHHMMSS(state.abrasiveMs);
 
   // Beacons
-  if (state.running && !state.paused) {
-    setBeacon('beaconPlanet', beaconClass(goal.planetRpm, live.planetRpm));
-    setBeacon('beaconCentral', beaconClass(goal.centralRpm, live.centralRpm));
-    setBeacon('beaconVib', beaconClass(goal.vib, live.vib));
+  if (state.running) {
+    setBeacon('beaconPlanet', beaconClass(goal.planetRpm, Math.abs(live.planetRpm), BEACON_RPM_TOLERANCE));
+    setBeacon('beaconCentral', beaconClass(goal.centralRpm, Math.abs(live.centralRpm), BEACON_RPM_TOLERANCE));
+    setBeacon('beaconVib', beaconClass(goal.vibPwm, live.vibPwm, BEACON_VIB_TOLERANCE));
   } else {
     setBeacon('beaconPlanet', 'red');
     setBeacon('beaconCentral', 'red');
@@ -150,29 +133,17 @@ function render() {
   }
 
   const startBtn = document.getElementById('startBtn');
-  const pauseBtn = document.getElementById('pauseBtn');
+  const stopBtn  = document.getElementById('stopBtn');
   const sopBtn   = document.getElementById('sopBtn');
 
-  if (state.paused) {
-    startBtn.textContent = 'Resume';
-    startBtn.disabled = false;
-    pauseBtn.textContent = 'Cancel';
-    pauseBtn.className = 'btn btn-stop';
-    sopBtn.disabled = true;
-  } else if (state.running) {
-    startBtn.textContent = 'Start';
+  if (state.running) {
     startBtn.disabled = true;
-    pauseBtn.textContent = 'Pause';
-    pauseBtn.className = 'btn btn-pause';
-    pauseBtn.disabled = false;
-    sopBtn.disabled = true;
+    stopBtn.disabled  = false;
+    sopBtn.disabled   = true;
   } else {
-    startBtn.textContent = 'Start';
     startBtn.disabled = false;
-    pauseBtn.textContent = 'Pause';
-    pauseBtn.className = 'btn btn-pause';
-    pauseBtn.disabled = true;
-    sopBtn.disabled = false;
+    stopBtn.disabled  = true;
+    sopBtn.disabled   = false;
   }
 }
 
@@ -181,72 +152,48 @@ function render() {
 // ============================================================
 function startRun() {
   if (abrasiveLocked) return;
-  if (state.paused) {
-    state.paused = false;
-    sendCommand('resume');
-    addLogEntry('RESUMED');
-    render();
-    return;
-  }
   runNumber++;
   state.running = true;
-  state.paused  = false;
-  halfwayReversed = false;
+  state.sopActive = false;
   state.countdownMs = goal.timeMins * 60 * 1000;
-  sendCommand(`prpm ${goal.planetRpm}`);
-  sendCommand(`crpm ${goal.centralRpm}`);
-  sendCommand(`vib ${goal.vib}`);
-  sendCommand('start');
+  sendCommand(`P:${goal.planetRpm}`);
+  sendCommand(`C:${goal.centralRpm}`);
+  sendCommand(`V:${goal.vibPwm}`);
+  sendCommand(`VD:${vibDir}`);
+  sendCommand('START');
   addLogEntry('STARTED');
   render();
 }
 
-function pauseOrCancel() {
-  if (abrasiveLocked) return;
-  if (state.paused) {
-    state.running   = false;
-    state.paused    = false;
-    state.sopActive = false;
-    state.countdownMs = 0;
-    sendCommand('cancel');
-    addLogEntry('CANCELLED');
-    render();
-    return;
-  }
-  if (state.running) {
-    state.paused = true;
-    sendCommand('pause');
-    addLogEntry('PAUSED');
-    render();
-  }
+function stopRun() {
+  state.running   = false;
+  state.sopActive = false;
+  state.countdownMs = 0;
+  sendCommand('STOP');
+  addLogEntry('STOPPED');
+  render();
 }
 
 function startSop() {
   if (abrasiveLocked) return;
   runNumber++;
   state.running   = true;
-  state.paused    = false;
   state.sopActive = true;
-  halfwayReversed = false;
   goal.planetRpm  = settings.sopPlanetRpm;
   goal.centralRpm = settings.sopCentralRpm;
-  goal.vib        = settings.sopVib;
+  goal.vibPwm     = settings.sopVibPwm;
   goal.timeMins   = settings.sopTimeMins;
   state.countdownMs = settings.sopTimeMins * 60 * 1000;
-  sendCommand(`prpm ${settings.sopPlanetRpm}`);
-  sendCommand(`crpm ${settings.sopCentralRpm}`);
-  sendCommand(`vib ${settings.sopVib}`);
-  sendCommand('start');
+  sendCommand('SOP1');
   addLogEntry('SOP STARTED');
   render();
 }
 
 function fullStop() {
   state.running   = false;
-  state.paused    = false;
   state.sopActive = false;
   state.countdownMs = 0;
-  sendCommand('stop');
+  sendCommand('STOP');
   addLogEntry('FINISHED');
   render();
 }
@@ -274,7 +221,6 @@ function cancelSopExit() {
 }
 
 function adjust(target, dir) {
-  // If SOP is active and they're changing speed/vib, confirm first
   if (state.sopActive && (target === 'planet' || target === 'central' || target === 'vib')) {
     requestSopExit(target, dir);
     return;
@@ -285,18 +231,18 @@ function adjust(target, dir) {
 function applyAdjust(target, dir) {
   if (target === 'planet') {
     const delta = dir === 'up' ? 10 : -10;
-    goal.planetRpm = Math.max(0, goal.planetRpm + delta);
-    if (state.running && !state.paused) sendCommand(`prpm ${goal.planetRpm}`);
+    goal.planetRpm = Math.max(0, Math.min(600, goal.planetRpm + delta));
+    if (state.running) sendCommand(`P:${goal.planetRpm}`);
   }
   if (target === 'central') {
     const delta = dir === 'up' ? 10 : -10;
-    goal.centralRpm = Math.max(0, goal.centralRpm + delta);
-    if (state.running && !state.paused) sendCommand(`crpm ${goal.centralRpm}`);
+    goal.centralRpm = Math.max(0, Math.min(600, goal.centralRpm + delta));
+    if (state.running) sendCommand(`C:${goal.centralRpm}`);
   }
   if (target === 'vib') {
-    const delta = dir === 'up' ? 5 : -5;
-    goal.vib = Math.max(0, Math.min(100, goal.vib + delta));
-    sendCommand(`vib ${goal.vib}`);
+    const delta = dir === 'up' ? 10 : -10;
+    goal.vibPwm = Math.max(0, Math.min(255, goal.vibPwm + delta));
+    if (state.running) sendCommand(`V:${goal.vibPwm}`);
   }
   if (target === 'time') {
     goal.timeMins = Math.max(0, goal.timeMins + (dir === 'up' ? 10 : -10));
@@ -305,7 +251,7 @@ function applyAdjust(target, dir) {
 }
 
 // ============================================================
-//  Data Log (event-based: start, pause, resume, finish only)
+//  Data Log
 // ============================================================
 function addLogEntry(event) {
   const entry = {
@@ -314,14 +260,14 @@ function addLogEntry(event) {
     event: event,
     planetRpm: goal.planetRpm,
     centralRpm: goal.centralRpm,
-    vib: goal.vib,
+    vibPwm: goal.vibPwm,
     timer: formatMMSS(state.countdownMs)
   };
   dataLog.push(entry);
 
   const tbody = document.getElementById('logBody');
   const tr = document.createElement('tr');
-  tr.innerHTML = `<td>${entry.run}</td><td>${entry.time}</td><td>${entry.event}</td><td>${entry.planetRpm}</td><td>${entry.centralRpm}</td><td>${entry.vib}%</td><td>${entry.timer}</td>`;
+  tr.innerHTML = `<td>${entry.run}</td><td>${entry.time}</td><td>${entry.event}</td><td>${entry.planetRpm}</td><td>${entry.centralRpm}</td><td>${entry.vibPwm}</td><td>${entry.timer}</td>`;
   tbody.appendChild(tr);
   tr.scrollIntoView({ block: 'end' });
 
@@ -330,8 +276,8 @@ function addLogEntry(event) {
 
 async function exportCsv() {
   if (dataLog.length === 0) return;
-  const header = 'Run,Time,Event,Planet RPM,Central RPM,Vib %,Timer\n';
-  const rows = dataLog.map(e => `${e.run},${e.time},${e.event},${e.planetRpm},${e.centralRpm},${e.vib},${e.timer}`).join('\n');
+  const header = 'Run,Time,Event,Planet RPM,Central RPM,Vib PWM,Timer\n';
+  const rows = dataLog.map(e => `${e.run},${e.time},${e.event},${e.planetRpm},${e.centralRpm},${e.vibPwm},${e.timer}`).join('\n');
   const fileName = `finisher-log-${new Date().toISOString().slice(0, 10)}.csv`;
   try {
     const savedPath = await window.finisher.saveCsv(header + rows, fileName);
@@ -354,9 +300,8 @@ function clearLog() {
 function showAbrasivePopup() {
   abrasiveLocked = true;
   if (state.running) {
-    sendCommand('stop');
+    sendCommand('STOP');
     state.running = false;
-    state.paused = false;
     state.sopActive = false;
     state.countdownMs = 0;
     addLogEntry('ABRASIVE STOP');
@@ -386,7 +331,7 @@ function resetAbrasiveTimer() {
 function renderSettings() {
   document.getElementById('sopPlanetVal').textContent = settings.sopPlanetRpm;
   document.getElementById('sopCentralVal').textContent = settings.sopCentralRpm;
-  document.getElementById('sopVibVal').textContent = settings.sopVib;
+  document.getElementById('sopVibVal').textContent = settings.sopVibPwm;
   document.getElementById('sopTimeVal').textContent = settings.sopTimeMins;
   document.getElementById('abrasiveHoursVal').textContent = settings.abrasiveHours;
   document.getElementById('abrasiveRemaining').textContent = formatHHMMSS(state.abrasiveMs);
@@ -403,12 +348,12 @@ function saveSettings() {
 }
 
 // SOP parameter buttons
-document.getElementById('sopPlanetUp').addEventListener('click', () => adjustSetting('sopPlanetRpm', 10, 0, 1000));
-document.getElementById('sopPlanetDown').addEventListener('click', () => adjustSetting('sopPlanetRpm', -10, 0, 1000));
-document.getElementById('sopCentralUp').addEventListener('click', () => adjustSetting('sopCentralRpm', 10, 0, 1000));
-document.getElementById('sopCentralDown').addEventListener('click', () => adjustSetting('sopCentralRpm', -10, 0, 1000));
-document.getElementById('sopVibUp').addEventListener('click', () => adjustSetting('sopVib', 5, 0, 100));
-document.getElementById('sopVibDown').addEventListener('click', () => adjustSetting('sopVib', -5, 0, 100));
+document.getElementById('sopPlanetUp').addEventListener('click', () => adjustSetting('sopPlanetRpm', 10, 0, 600));
+document.getElementById('sopPlanetDown').addEventListener('click', () => adjustSetting('sopPlanetRpm', -10, 0, 600));
+document.getElementById('sopCentralUp').addEventListener('click', () => adjustSetting('sopCentralRpm', 10, 0, 600));
+document.getElementById('sopCentralDown').addEventListener('click', () => adjustSetting('sopCentralRpm', -10, 0, 600));
+document.getElementById('sopVibUp').addEventListener('click', () => adjustSetting('sopVibPwm', 10, 0, 255));
+document.getElementById('sopVibDown').addEventListener('click', () => adjustSetting('sopVibPwm', -10, 0, 255));
 document.getElementById('sopTimeUp').addEventListener('click', () => adjustSetting('sopTimeMins', 10, 10, 600));
 document.getElementById('sopTimeDown').addEventListener('click', () => adjustSetting('sopTimeMins', -10, 10, 600));
 
@@ -477,7 +422,7 @@ for (const tab of document.querySelectorAll('.tab')) {
 //  Event wiring
 // ============================================================
 document.getElementById('startBtn').addEventListener('click', startRun);
-document.getElementById('pauseBtn').addEventListener('click', pauseOrCancel);
+document.getElementById('stopBtn').addEventListener('click', stopRun);
 document.getElementById('sopBtn').addEventListener('click', startSop);
 document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
 document.getElementById('clearLogBtn').addEventListener('click', clearLog);
@@ -487,15 +432,12 @@ for (const el of document.querySelectorAll('.spin')) {
   el.addEventListener('click', () => adjust(el.dataset.target, el.dataset.dir));
 }
 
-// Direction toggle buttons
-function toggleDir(key, cmdPrefix) {
-  dirs[key] = dirs[key] === 'CW' ? 'CCW' : 'CW';
-  sendCommand(`${cmdPrefix} ${dirs[key].toLowerCase()}`);
+// Vibration direction toggle
+document.getElementById('vibDirBtn').addEventListener('click', () => {
+  vibDir = vibDir === 'F' ? 'R' : 'F';
+  sendCommand(`VD:${vibDir}`);
   render();
-}
-
-document.getElementById('dirP1').addEventListener('click', () => toggleDir('p1', 'dir1'));
-document.getElementById('dirCentral').addEventListener('click', () => toggleDir('central', 'dirc'));
+});
 
 // ============================================================
 //  Timer tick (1 second)
@@ -503,7 +445,7 @@ document.getElementById('dirCentral').addEventListener('click', () => toggleDir(
 let abrasiveSaveCounter = 0;
 
 setInterval(() => {
-  if ((state.running && !state.paused) && state.countdownMs > 0) {
+  if (state.running && state.countdownMs > 0) {
     state.countdownMs = Math.max(0, state.countdownMs - 1000);
     state.abrasiveMs  = Math.max(0, state.abrasiveMs - 1000);
 
@@ -512,17 +454,6 @@ setInterval(() => {
     if (abrasiveSaveCounter >= 30) {
       abrasiveSaveCounter = 0;
       window.finisher.saveAbrasiveMs(state.abrasiveMs).catch(() => {});
-    }
-
-    // Auto-reverse all stepper directions at the halfway point
-    const totalMs = goal.timeMins * 60 * 1000;
-    if (!halfwayReversed && totalMs > 0 && state.countdownMs <= totalMs / 2) {
-      halfwayReversed = true;
-      sendCommand('reverse');
-      dirs.p1 = dirs.p1 === 'CW' ? 'CCW' : 'CW';
-      dirs.p2 = dirs.p2 === 'CW' ? 'CCW' : 'CW';
-      dirs.central = dirs.central === 'CW' ? 'CCW' : 'CW';
-      addLogEntry('DIRECTION REVERSED (halfway)');
     }
 
     if (state.abrasiveMs === 0 && !abrasiveLocked) {
@@ -552,9 +483,8 @@ function parseSerialLine(line) {
 
     if (kv.state) {
       const st = kv.state.toUpperCase();
-      state.running   = st !== 'IDLE';
-      state.paused    = st === 'PAUSED';
-      state.sopActive = st === 'SOP';
+      state.phase   = st;
+      state.running = (st !== 'IDLE');
     }
     if (kv.planetRPM !== undefined) {
       const v = Number(kv.planetRPM);
@@ -566,7 +496,10 @@ function parseSerialLine(line) {
     }
     if (kv.vib !== undefined) {
       const v = Number(kv.vib);
-      if (!isNaN(v)) live.vib = v;
+      if (!isNaN(v)) live.vibPwm = v;
+    }
+    if (kv.vibDir !== undefined) {
+      vibDir = kv.vibDir === 'R' ? 'R' : 'F';
     }
     render();
   }
@@ -586,8 +519,8 @@ window.finisher.serial.onConnectionChange((info) => {
     if (saved) {
       if (typeof saved.sopPlanetRpm === 'number')  settings.sopPlanetRpm  = saved.sopPlanetRpm;
       if (typeof saved.sopCentralRpm === 'number') settings.sopCentralRpm = saved.sopCentralRpm;
-      if (typeof saved.sopVib === 'number')        settings.sopVib        = saved.sopVib;
-      if (typeof saved.sopTimeMins === 'number')   settings.sopTimeMins   = saved.sopTimeMins;
+      if (typeof saved.sopVibPwm === 'number')     settings.sopVibPwm     = saved.sopVibPwm;
+      if (typeof saved.sopTimeMins === 'number')    settings.sopTimeMins   = saved.sopTimeMins;
       if (typeof saved.abrasiveHours === 'number') settings.abrasiveHours = saved.abrasiveHours;
     }
   } catch {}

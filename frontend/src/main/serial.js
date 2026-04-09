@@ -76,7 +76,7 @@ class SerialManager {
       const trimmed = String(line).trim();
       if (!trimmed) return;
       console.log(`[SERIAL RX] ${trimmed}`);
-      if (trimmed.startsWith('STATUS ') || trimmed.includes('Finisher Controller')) {
+      if (trimmed.startsWith('STATUS ') || trimmed.includes('Surface Drag Finishing')) {
         gotStatus = true;
       }
       if (this._onLine) this._onLine(trimmed);
@@ -97,7 +97,7 @@ class SerialManager {
 
     // Send a status request and wait for a valid response
     try {
-      this._port.write('status\n');
+      this._port.write('STATUS\n');
     } catch {}
 
     // Wait up to 4 seconds for a STATUS response

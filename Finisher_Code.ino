@@ -4,8 +4,8 @@
 #define PLANETARY1_PUL  6
 #define PLANETARY1_DIR  5
 
-#define CENTRAL_PUL     8
-#define CENTRAL_DIR     7
+#define CENTRAL_PUL     2
+#define CENTRAL_DIR     3
 
 #define VIB_RPWM        9
 #define VIB_LPWM        10
@@ -185,7 +185,7 @@ void parseCommand(String cmd) {
 
   // ── SOP1 ───────────────────────────────────────────────────────────────────
   if (cmd == "SOP1") {
-    pendingPlanetaryRPM = 170;
+    pendingPlanetaryRPM = -170;
     pendingCentralRPM   = 210;
     pendingVibPWM       = 211;
     beginStartupSequence();

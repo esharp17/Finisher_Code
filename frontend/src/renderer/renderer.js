@@ -161,8 +161,8 @@ function render() {
 // ============================================================
 let dirSign = 1;
 
-function signedPlanet() { return dirSign * Math.abs(goal.planetRpm); }
-function signedCentral() { return -dirSign * Math.abs(goal.centralRpm); }
+function signedPlanet() { return -dirSign * Math.abs(goal.planetRpm); }
+function signedCentral() { return dirSign * Math.abs(goal.centralRpm); }
 
 // ============================================================
 //  Actions

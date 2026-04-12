@@ -428,3 +428,16 @@ html, body {
   padding: 10px 40px;
   min-width: 160px;
 }
+
+/* ===== COOLDOWN POPUP ===== */
+.cooldown-popup .popup-title {
+  color: #2980b9;
+}
+
+.cooldown-timer {
+  font-size: 48px;
+  font-weight: 900;
+  color: #2c3e50;
+  letter-spacing: 3px;
+  margin: 12px 0 16px;
+}

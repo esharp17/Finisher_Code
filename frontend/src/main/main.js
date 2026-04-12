@@ -119,6 +119,26 @@ ipcMain.handle('app:saveAbrasiveMs', async (_evt, ms) => {
   return true;
 });
 
+// ---- Data log persistence ----
+const logFilePath = path.join(app.getPath('userData'), 'data-log.json');
+
+ipcMain.handle('app:loadLog', async () => {
+  try {
+    if (fs.existsSync(logFilePath)) {
+      const data = JSON.parse(fs.readFileSync(logFilePath, 'utf8'));
+      if (Array.isArray(data.entries)) return data;
+    }
+  } catch {}
+  return null;
+});
+
+ipcMain.handle('app:saveLog', async (_evt, logData) => {
+  try {
+    fs.writeFileSync(logFilePath, JSON.stringify(logData), 'utf8');
+  } catch {}
+  return true;
+});
+
 ipcMain.handle('app:saveCsv', async (_evt, csvString, suggestedName) => {
   const docsDir = path.join(os.homedir(), 'Documents');
   const saveDir = fs.existsSync(docsDir) ? docsDir : os.homedir();

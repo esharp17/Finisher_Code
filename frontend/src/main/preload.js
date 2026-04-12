@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('finisher', {
   loadSettings: () => ipcRenderer.invoke('app:loadSettings'),
   saveSettings: (s) => ipcRenderer.invoke('app:saveSettings', s),
   updateApp: () => ipcRenderer.invoke('app:updateApp'),
+  loadLog: () => ipcRenderer.invoke('app:loadLog'),
+  saveLog: (logData) => ipcRenderer.invoke('app:saveLog', logData),
   serial: {
     listPorts: () => ipcRenderer.invoke('serial:listPorts'),
     autoConnect: () => ipcRenderer.invoke('serial:autoConnect'),

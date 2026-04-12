@@ -44,6 +44,13 @@ const dataLog = [];
 let runNumber = 0;
 let abrasiveLocked = false;
 
+// Cooldown: every 30 min of run time, 2 min cooldown, then reverse stepper dirs
+const COOLDOWN_INTERVAL_MS = 30 * 60 * 1000;  // 30 minutes
+const COOLDOWN_DURATION_MS = 2 * 60 * 1000;    // 2 minutes
+let cooldownActive = false;
+let cooldownRemainingMs = 0;
+let runTimeSinceCooldown = 0;  // accumulates run-time ms since last cooldown
+
 // ============================================================
 //  Helpers
 // ============================================================
@@ -148,6 +155,16 @@ function render() {
 }
 
 // ============================================================
+//  Direction convention: planetary & central always opposite.
+//  dirSign tracks current polarity: +1 = planet+/central−, −1 = planet−/central+
+//  Goal values are always stored as positive magnitudes.
+// ============================================================
+let dirSign = 1;
+
+function signedPlanet() { return dirSign * Math.abs(goal.planetRpm); }
+function signedCentral() { return -dirSign * Math.abs(goal.centralRpm); }
+
+// ============================================================
 //  Actions
 // ============================================================
 function startRun() {
@@ -156,8 +173,10 @@ function startRun() {
   state.running = true;
   state.sopActive = false;
   state.countdownMs = goal.timeMins * 60 * 1000;
-  sendCommand(`P:${goal.planetRpm}`);
-  sendCommand(`C:${goal.centralRpm}`);
+  runTimeSinceCooldown = 0;
+  dirSign = 1;
+  sendCommand(`P:${signedPlanet()}`);
+  sendCommand(`C:${signedCentral()}`);
   sendCommand(`V:${goal.vibPwm}`);
   sendCommand(`VD:${vibDir}`);
   sendCommand('START');
@@ -169,6 +188,10 @@ function stopRun() {
   state.running   = false;
   state.sopActive = false;
   state.countdownMs = 0;
+  cooldownActive = false;
+  cooldownRemainingMs = 0;
+  runTimeSinceCooldown = 0;
+  document.getElementById('cooldownOverlay').classList.remove('visible');
   sendCommand('STOP');
   addLogEntry('STOPPED');
   render();
@@ -184,7 +207,12 @@ function startSop() {
   goal.vibPwm     = settings.sopVibPwm;
   goal.timeMins   = settings.sopTimeMins;
   state.countdownMs = settings.sopTimeMins * 60 * 1000;
-  sendCommand('SOP1');
+  runTimeSinceCooldown = 0;
+  dirSign = 1;
+  sendCommand(`P:${signedPlanet()}`);
+  sendCommand(`C:${signedCentral()}`);
+  sendCommand(`V:${goal.vibPwm}`);
+  sendCommand('START');
   addLogEntry('SOP STARTED');
   render();
 }
@@ -232,12 +260,12 @@ function applyAdjust(target, dir) {
   if (target === 'planet') {
     const delta = dir === 'up' ? 10 : -10;
     goal.planetRpm = Math.max(0, Math.min(600, goal.planetRpm + delta));
-    if (state.running) sendCommand(`P:${goal.planetRpm}`);
+    if (state.running) sendCommand(`P:${signedPlanet()}`);
   }
   if (target === 'central') {
     const delta = dir === 'up' ? 10 : -10;
     goal.centralRpm = Math.max(0, Math.min(600, goal.centralRpm + delta));
-    if (state.running) sendCommand(`C:${goal.centralRpm}`);
+    if (state.running) sendCommand(`C:${signedCentral()}`);
   }
   if (target === 'vib') {
     const delta = dir === 'up' ? 10 : -10;
@@ -264,14 +292,21 @@ function addLogEntry(event) {
     timer: formatMMSS(state.countdownMs)
   };
   dataLog.push(entry);
+  appendLogRow(entry);
+  document.getElementById('logCount').textContent = `${dataLog.length} entries`;
+  persistLog();
+}
 
+function appendLogRow(entry) {
   const tbody = document.getElementById('logBody');
   const tr = document.createElement('tr');
   tr.innerHTML = `<td>${entry.run}</td><td>${entry.time}</td><td>${entry.event}</td><td>${entry.planetRpm}</td><td>${entry.centralRpm}</td><td>${entry.vibPwm}</td><td>${entry.timer}</td>`;
   tbody.appendChild(tr);
   tr.scrollIntoView({ block: 'end' });
+}
 
-  document.getElementById('logCount').textContent = `${dataLog.length} entries`;
+function persistLog() {
+  window.finisher.saveLog({ entries: dataLog, runNumber }).catch(() => {});
 }
 
 async function exportCsv() {
@@ -292,6 +327,39 @@ function clearLog() {
   runNumber = 0;
   document.getElementById('logBody').innerHTML = '';
   document.getElementById('logCount').textContent = '0 entries';
+  persistLog();
+}
+
+// ============================================================
+//  Cooldown Logic
+// ============================================================
+function beginCooldown() {
+  cooldownActive = true;
+  cooldownRemainingMs = COOLDOWN_DURATION_MS;
+  runTimeSinceCooldown = 0;
+  sendCommand('STOP');
+  addLogEntry('COOLDOWN START');
+  document.getElementById('cooldownTimer').textContent = formatMMSS(cooldownRemainingMs);
+  document.getElementById('cooldownOverlay').classList.add('visible');
+  render();
+}
+
+function endCooldown() {
+  cooldownActive = false;
+  cooldownRemainingMs = 0;
+  document.getElementById('cooldownOverlay').classList.remove('visible');
+
+  // Flip direction polarity — motors stay opposite to each other
+  dirSign = -dirSign;
+
+  // Re-send speeds and restart
+  sendCommand(`P:${signedPlanet()}`);
+  sendCommand(`C:${signedCentral()}`);
+  sendCommand(`V:${goal.vibPwm}`);
+  sendCommand(`VD:${vibDir}`);
+  sendCommand('START');
+  addLogEntry('COOLDOWN END — REVERSED');
+  render();
 }
 
 // ============================================================
@@ -445,9 +513,21 @@ document.getElementById('vibDirBtn').addEventListener('click', () => {
 let abrasiveSaveCounter = 0;
 
 setInterval(() => {
+  // Cooldown tick (runs independently — main timer is paused)
+  if (cooldownActive) {
+    cooldownRemainingMs = Math.max(0, cooldownRemainingMs - 1000);
+    document.getElementById('cooldownTimer').textContent = formatMMSS(cooldownRemainingMs);
+    if (cooldownRemainingMs === 0) {
+      endCooldown();
+    }
+    render();
+    return; // don't tick main timer during cooldown
+  }
+
   if (state.running && state.countdownMs > 0) {
     state.countdownMs = Math.max(0, state.countdownMs - 1000);
     state.abrasiveMs  = Math.max(0, state.abrasiveMs - 1000);
+    runTimeSinceCooldown += 1000;
 
     // Save abrasive timer to disk every 30 seconds of run time
     abrasiveSaveCounter++;
@@ -459,6 +539,12 @@ setInterval(() => {
     if (state.abrasiveMs === 0 && !abrasiveLocked) {
       window.finisher.saveAbrasiveMs(0).catch(() => {});
       showAbrasivePopup();
+      return;
+    }
+
+    // Cooldown check: every 30 minutes of run time
+    if (runTimeSinceCooldown >= COOLDOWN_INTERVAL_MS) {
+      beginCooldown();
       return;
     }
 
@@ -531,6 +617,19 @@ window.finisher.serial.onConnectionChange((info) => {
     if (typeof saved === 'number' && saved >= 0) {
       state.abrasiveMs = saved;
       if (saved === 0) showAbrasivePopup();
+    }
+  } catch {}
+
+  // Load persisted data log
+  try {
+    const logData = await window.finisher.loadLog();
+    if (logData && Array.isArray(logData.entries)) {
+      for (const entry of logData.entries) {
+        dataLog.push(entry);
+        appendLogRow(entry);
+      }
+      if (typeof logData.runNumber === 'number') runNumber = logData.runNumber;
+      document.getElementById('logCount').textContent = `${dataLog.length} entries`;
     }
   } catch {}
 

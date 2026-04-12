@@ -569,8 +569,9 @@ function parseSerialLine(line) {
 
     if (kv.state) {
       const st = kv.state.toUpperCase();
-      state.phase   = st;
-      state.running = (st !== 'IDLE');
+      state.phase = st;
+      // Do NOT override state.running from STATUS — the UI is the authority
+      // on run state. The Arduino may report RUNNING during ramp-down after STOP.
     }
     if (kv.planetRPM !== undefined) {
       const v = Number(kv.planetRPM);

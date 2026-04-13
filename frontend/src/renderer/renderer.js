@@ -27,6 +27,7 @@ const live = {
 
 const state = {
   running: false,
+  paused: false,
   sopActive: false,
   countdownMs: 0,
   abrasiveMs: 12 * 60 * 60 * 1000,
@@ -67,6 +68,9 @@ function formatHHMMSS(ms) {
   const mm = Math.floor((s % 3600) / 60);
   return `${pad2(hh)}:${pad2(mm)}:${pad2(s % 60)}`;
 }
+
+// Central RPM display: divide by 4 for 1:4 speed reducer
+function centralDisplayRpm(val) { return Math.round(val / 4); }
 
 function timeStamp() {
   const d = new Date();
@@ -112,7 +116,7 @@ function setBeacon(id, cls) {
 // ============================================================
 function render() {
   document.getElementById('planetVal').textContent = goal.planetRpm;
-  document.getElementById('centralVal').textContent = goal.centralRpm;
+  document.getElementById('centralVal').textContent = centralDisplayRpm(goal.centralRpm);
   document.getElementById('vibVal').textContent = goal.vibPwm;
   document.getElementById('timeVal').textContent = goal.timeMins;
   document.getElementById('vibDirBtn').textContent = vibDir === 'F' ? 'FWD' : 'REV';
@@ -122,7 +126,7 @@ function render() {
   // Beacons
   if (state.running) {
     setBeacon('beaconPlanet', beaconClass(goal.planetRpm, Math.abs(live.planetRpm), BEACON_RPM_TOLERANCE));
-    setBeacon('beaconCentral', beaconClass(goal.centralRpm, Math.abs(live.centralRpm), BEACON_RPM_TOLERANCE));
+    setBeacon('beaconCentral', beaconClass(centralDisplayRpm(goal.centralRpm), centralDisplayRpm(Math.abs(live.centralRpm)), BEACON_RPM_TOLERANCE));
     setBeacon('beaconVib', beaconClass(goal.vibPwm, live.vibPwm, BEACON_VIB_TOLERANCE));
   } else {
     setBeacon('beaconPlanet', 'red');
@@ -139,17 +143,32 @@ function render() {
     connEl.className = 'conn-status';
   }
 
-  const startBtn = document.getElementById('startBtn');
-  const stopBtn  = document.getElementById('stopBtn');
-  const sopBtn   = document.getElementById('sopBtn');
+  const startBtn  = document.getElementById('startBtn');
+  const pauseBtn  = document.getElementById('pauseBtn');
+  const stopBtn   = document.getElementById('stopBtn');
+  const resumeBtn = document.getElementById('resumeBtn');
+  const sopBtn    = document.getElementById('sopBtn');
 
-  if (state.running) {
+  if (state.running && !state.paused) {
+    // Running: show Pause, hide Stop & Resume
     startBtn.disabled = true;
-    stopBtn.disabled  = false;
+    pauseBtn.disabled = false;  pauseBtn.style.display = '';
+    stopBtn.disabled  = true;   stopBtn.style.display  = 'none';
+    resumeBtn.disabled = true;  resumeBtn.style.display = 'none';
+    sopBtn.disabled   = true;
+  } else if (state.paused) {
+    // Paused: show Stop & Resume, hide Pause
+    startBtn.disabled = true;
+    pauseBtn.disabled = true;   pauseBtn.style.display = 'none';
+    stopBtn.disabled  = false;  stopBtn.style.display  = '';
+    resumeBtn.disabled = false; resumeBtn.style.display = '';
     sopBtn.disabled   = true;
   } else {
+    // Idle: show Start only
     startBtn.disabled = false;
-    stopBtn.disabled  = true;
+    pauseBtn.disabled = true;   pauseBtn.style.display = '';
+    stopBtn.disabled  = true;   stopBtn.style.display  = 'none';
+    resumeBtn.disabled = true;  resumeBtn.style.display = 'none';
     sopBtn.disabled   = false;
   }
 }
@@ -184,8 +203,27 @@ function startRun() {
   render();
 }
 
+function pauseRun() {
+  state.paused = true;
+  sendCommand('STOP');
+  addLogEntry('PAUSED');
+  render();
+}
+
+function resumeRun() {
+  state.paused = false;
+  sendCommand(`P:${signedPlanet()}`);
+  sendCommand(`C:${signedCentral()}`);
+  sendCommand(`V:${goal.vibPwm}`);
+  sendCommand(`VD:${vibDir}`);
+  sendCommand('START');
+  addLogEntry('RESUMED');
+  render();
+}
+
 function stopRun() {
   state.running   = false;
+  state.paused    = false;
   state.sopActive = false;
   state.countdownMs = 0;
   cooldownActive = false;
@@ -260,17 +298,17 @@ function applyAdjust(target, dir) {
   if (target === 'planet') {
     const delta = dir === 'up' ? 10 : -10;
     goal.planetRpm = Math.max(0, Math.min(600, goal.planetRpm + delta));
-    if (state.running) sendCommand(`P:${signedPlanet()}`);
+    if (state.running && !state.paused) sendCommand(`P:${signedPlanet()}`);
   }
   if (target === 'central') {
     const delta = dir === 'up' ? 10 : -10;
     goal.centralRpm = Math.max(0, Math.min(600, goal.centralRpm + delta));
-    if (state.running) sendCommand(`C:${signedCentral()}`);
+    if (state.running && !state.paused) sendCommand(`C:${signedCentral()}`);
   }
   if (target === 'vib') {
     const delta = dir === 'up' ? 10 : -10;
     goal.vibPwm = Math.max(0, Math.min(255, goal.vibPwm + delta));
-    if (state.running) sendCommand(`V:${goal.vibPwm}`);
+    if (state.running && !state.paused) sendCommand(`V:${goal.vibPwm}`);
   }
   if (target === 'time') {
     goal.timeMins = Math.max(0, goal.timeMins + (dir === 'up' ? 10 : -10));
@@ -287,7 +325,7 @@ function addLogEntry(event) {
     time: timeStamp(),
     event: event,
     planetRpm: goal.planetRpm,
-    centralRpm: goal.centralRpm,
+    centralRpm: centralDisplayRpm(goal.centralRpm),
     vibPwm: goal.vibPwm,
     timer: formatMMSS(state.countdownMs)
   };
@@ -398,7 +436,7 @@ function resetAbrasiveTimer() {
 // ============================================================
 function renderSettings() {
   document.getElementById('sopPlanetVal').textContent = settings.sopPlanetRpm;
-  document.getElementById('sopCentralVal').textContent = settings.sopCentralRpm;
+  document.getElementById('sopCentralVal').textContent = centralDisplayRpm(settings.sopCentralRpm);
   document.getElementById('sopVibVal').textContent = settings.sopVibPwm;
   document.getElementById('sopTimeVal').textContent = settings.sopTimeMins;
   document.getElementById('abrasiveHoursVal').textContent = settings.abrasiveHours;
@@ -490,7 +528,9 @@ for (const tab of document.querySelectorAll('.tab')) {
 //  Event wiring
 // ============================================================
 document.getElementById('startBtn').addEventListener('click', startRun);
+document.getElementById('pauseBtn').addEventListener('click', pauseRun);
 document.getElementById('stopBtn').addEventListener('click', stopRun);
+document.getElementById('resumeBtn').addEventListener('click', resumeRun);
 document.getElementById('sopBtn').addEventListener('click', startSop);
 document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
 document.getElementById('clearLogBtn').addEventListener('click', clearLog);
@@ -524,7 +564,7 @@ setInterval(() => {
     return; // don't tick main timer during cooldown
   }
 
-  if (state.running && state.countdownMs > 0) {
+  if (state.running && !state.paused && state.countdownMs > 0) {
     state.countdownMs = Math.max(0, state.countdownMs - 1000);
     state.abrasiveMs  = Math.max(0, state.abrasiveMs - 1000);
     runTimeSinceCooldown += 1000;

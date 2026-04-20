@@ -36,9 +36,9 @@ RampState vibRamp        = {0, 0, 0, 0, false};
 // ── Sequenced Startup ─────────────────────────────────────────────────────────
 // On first START command, motors come up one after another:
 //   0–5s   : vibration ramps to target
-//   5–10s  : central ramps to target
-//   10–15s : planetary ramps to target
-enum StartupPhase { IDLE, VIB_RAMP, CENTRAL_RAMP, PLANETARY_RAMP, RUNNING };
+//   5–10s  : planetary ramps to target
+//   10–15s : central ramps to target
+enum StartupPhase { IDLE, VIB_RAMP, PLANETARY_RAMP, CENTRAL_RAMP, RUNNING };
 StartupPhase startupPhase = IDLE;
 unsigned long phaseStartTime = 0;
 
@@ -64,7 +64,7 @@ void emitStatusLine() {
   if (now - lastStatusMs < STATUS_PERIOD_MS) return;
   lastStatusMs = now;
 
-  const char* phaseNames[] = {"IDLE","VIB_RAMP","CENTRAL_RAMP","PLANETARY_RAMP","RUNNING"};
+  const char* phaseNames[] = {"IDLE","VIB_RAMP","PLANETARY_RAMP","CENTRAL_RAMP","RUNNING"};
   float curPlanetRPM  = (planetaryRamp.currentVal / STEPS_PER_REV) * 60.0f;
   float curCentralRPM = (centralRamp.currentVal / STEPS_PER_REV) * 60.0f;
 
@@ -178,21 +178,10 @@ void updateStartupSequence() {
       if (elapsed >= RAMP_DURATION_MS) {
         vibRamp.currentVal = pendingVibPWM;
         vibRamp.ramping    = false;
-        startupPhase       = CENTRAL_RAMP;
+        startupPhase       = PLANETARY_RAMP;
         phaseStartTime     = millis();
-        startRamp(centralRamp, rpmToStepsPerSec(pendingCentralRPM));
-        Serial.println("[SEQ] Phase 2/3 — Central Motor ramping up...");
-      }
-      break;
-
-    case CENTRAL_RAMP:
-      if (elapsed >= RAMP_DURATION_MS) {
-        centralRamp.currentVal = rpmToStepsPerSec(pendingCentralRPM);
-        centralRamp.ramping    = false;
-        startupPhase           = PLANETARY_RAMP;
-        phaseStartTime         = millis();
         startRamp(planetaryRamp, rpmToStepsPerSec(pendingPlanetaryRPM));
-        Serial.println("[SEQ] Phase 3/3 — Planetary Motors ramping up...");
+        Serial.println("[SEQ] Phase 2/3 — Planetary Motor ramping up...");
       }
       break;
 
@@ -200,7 +189,18 @@ void updateStartupSequence() {
       if (elapsed >= RAMP_DURATION_MS) {
         planetaryRamp.currentVal = rpmToStepsPerSec(pendingPlanetaryRPM);
         planetaryRamp.ramping    = false;
-        startupPhase             = RUNNING;
+        startupPhase             = CENTRAL_RAMP;
+        phaseStartTime           = millis();
+        startRamp(centralRamp, rpmToStepsPerSec(pendingCentralRPM));
+        Serial.println("[SEQ] Phase 3/3 — Central Motor ramping up...");
+      }
+      break;
+
+    case CENTRAL_RAMP:
+      if (elapsed >= RAMP_DURATION_MS) {
+        centralRamp.currentVal = rpmToStepsPerSec(pendingCentralRPM);
+        centralRamp.ramping    = false;
+        startupPhase           = RUNNING;
         Serial.println("[SEQ] Startup complete — all motors at target speed.");
       }
       break;
@@ -268,7 +268,7 @@ void parseCommand(String cmd) {
 
   // ── STATUS ─────────────────────────────────────────────────────────────────
   if (cmd == "STATUS") {
-    const char* phaseNames[] = {"IDLE","VIB_RAMP","CENTRAL_RAMP","PLANETARY_RAMP","RUNNING"};
+    const char* phaseNames[] = {"IDLE","VIB_RAMP","PLANETARY_RAMP","CENTRAL_RAMP","RUNNING"};
     Serial.println("── Current Status ──────────────────────────");
     Serial.print("  Startup phase     : "); Serial.println(phaseNames[startupPhase]);
     Serial.print("  Central  target   : "); Serial.print(pendingCentralRPM);   Serial.println(" RPM");

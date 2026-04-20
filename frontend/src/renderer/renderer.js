@@ -33,7 +33,7 @@ const state = {
   countdownMs: 0,
   abrasiveMs: 12 * 60 * 60 * 1000,
   connected: false,
-  phase: 'IDLE'   // IDLE, VIB_RAMP, CENTRAL_RAMP, PLANETARY_RAMP, RUNNING
+  phase: 'IDLE'   // IDLE, VIB_RAMP, PLANETARY_RAMP, CENTRAL_RAMP, RUNNING
 };
 
 // Vibration direction

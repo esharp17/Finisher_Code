@@ -26,6 +26,22 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+
+  // Forward renderer console messages to main process stdout/stderr so
+  // --enable-logging captures them (useful for debugging on headless/kiosk).
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    const levels = ['LOG', 'WARN', 'ERROR', 'INFO'];
+    const tag = levels[level] || 'LOG';
+    process.stderr.write(`[RENDERER ${tag}] ${message} (${sourceId}:${line})\n`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    process.stderr.write(`[RENDERER CRASH] ${JSON.stringify(details)}\n`);
+  });
+
+  // Open DevTools if FINISHER_DEBUG=1 env var is set
+  if (process.env.FINISHER_DEBUG === '1') {
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  }
 }
 
 app.whenReady().then(() => {

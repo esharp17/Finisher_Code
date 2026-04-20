@@ -27,6 +27,8 @@ const live = {
 
 const state = {
   running: false,
+  paused: false,
+  estop: false,
   sopActive: false,
   countdownMs: 0,
   abrasiveMs: 12 * 60 * 60 * 1000,
@@ -143,14 +145,42 @@ function render() {
   const stopBtn  = document.getElementById('stopBtn');
   const sopBtn   = document.getElementById('sopBtn');
 
-  if (state.running) {
+  // Button label/role changes based on run state:
+  //   Idle       → [Start] [— hidden/disabled]
+  //   Running    → [— hidden] [Pause]
+  //   Paused     → [Resume] [Cancel]
+  if (state.paused) {
+    startBtn.textContent = 'Resume';
+    startBtn.className = 'btn btn-dark';
+    startBtn.disabled = state.estop;
+    startBtn.style.display = '';
+
+    stopBtn.textContent = 'Cancel';
+    stopBtn.className = 'btn btn-stop';
+    stopBtn.disabled = false;
+    stopBtn.style.display = '';
+
+    sopBtn.disabled = true;
+  } else if (state.running) {
+    startBtn.style.display = 'none';
     startBtn.disabled = true;
-    stopBtn.disabled  = false;
-    sopBtn.disabled   = true;
+
+    stopBtn.textContent = 'Pause';
+    stopBtn.className = 'btn btn-pause';
+    stopBtn.disabled = false;
+    stopBtn.style.display = '';
+
+    sopBtn.disabled = true;
   } else {
-    startBtn.disabled = false;
-    stopBtn.disabled  = true;
-    sopBtn.disabled   = false;
+    startBtn.textContent = 'Start';
+    startBtn.className = 'btn btn-dark';
+    startBtn.disabled = state.estop;
+    startBtn.style.display = '';
+
+    stopBtn.style.display = 'none';
+    stopBtn.disabled = true;
+
+    sopBtn.disabled = state.estop;
   }
 }
 
@@ -184,8 +214,29 @@ function startRun() {
   render();
 }
 
-function stopRun() {
+function pauseRun() {
+  if (!state.running || state.paused) return;
+  state.paused = true;
+  sendCommand('STOP');
+  addLogEntry('PAUSED');
+  render();
+}
+
+function resumeRun() {
+  if (!state.paused || state.estop) return;
+  state.paused = false;
+  sendCommand(`P:${signedPlanet()}`);
+  sendCommand(`C:${signedCentral()}`);
+  sendCommand(`V:${goal.vibPwm}`);
+  sendCommand(`VD:${vibDir}`);
+  sendCommand('START');
+  addLogEntry('RESUMED');
+  render();
+}
+
+function cancelRun() {
   state.running   = false;
+  state.paused    = false;
   state.sopActive = false;
   state.countdownMs = 0;
   cooldownActive = false;
@@ -193,8 +244,20 @@ function stopRun() {
   runTimeSinceCooldown = 0;
   document.getElementById('cooldownOverlay').classList.remove('visible');
   sendCommand('STOP');
-  addLogEntry('STOPPED');
+  addLogEntry('CANCELLED');
   render();
+}
+
+// Start button handler — dispatches to either startRun or resumeRun
+function startOrResume() {
+  if (state.paused) resumeRun();
+  else startRun();
+}
+
+// Stop button handler — dispatches to pauseRun or cancelRun
+function pauseOrCancel() {
+  if (state.paused) cancelRun();
+  else if (state.running) pauseRun();
 }
 
 function startSop() {
@@ -260,17 +323,17 @@ function applyAdjust(target, dir) {
   if (target === 'planet') {
     const delta = dir === 'up' ? 10 : -10;
     goal.planetRpm = Math.max(0, Math.min(600, goal.planetRpm + delta));
-    if (state.running) sendCommand(`P:${signedPlanet()}`);
+    if (state.running && !state.paused && !state.estop) sendCommand(`P:${signedPlanet()}`);
   }
   if (target === 'central') {
     const delta = dir === 'up' ? 10 : -10;
     goal.centralRpm = Math.max(0, Math.min(600, goal.centralRpm + delta));
-    if (state.running) sendCommand(`C:${signedCentral()}`);
+    if (state.running && !state.paused && !state.estop) sendCommand(`C:${signedCentral()}`);
   }
   if (target === 'vib') {
     const delta = dir === 'up' ? 10 : -10;
     goal.vibPwm = Math.max(0, Math.min(255, goal.vibPwm + delta));
-    if (state.running) sendCommand(`V:${goal.vibPwm}`);
+    if (state.running && !state.paused && !state.estop) sendCommand(`V:${goal.vibPwm}`);
   }
   if (target === 'time') {
     goal.timeMins = Math.max(0, goal.timeMins + (dir === 'up' ? 10 : -10));
@@ -489,8 +552,8 @@ for (const tab of document.querySelectorAll('.tab')) {
 // ============================================================
 //  Event wiring
 // ============================================================
-document.getElementById('startBtn').addEventListener('click', startRun);
-document.getElementById('stopBtn').addEventListener('click', stopRun);
+document.getElementById('startBtn').addEventListener('click', startOrResume);
+document.getElementById('stopBtn').addEventListener('click', pauseOrCancel);
 document.getElementById('sopBtn').addEventListener('click', startSop);
 document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
 document.getElementById('clearLogBtn').addEventListener('click', clearLog);
@@ -513,6 +576,12 @@ document.getElementById('vibDirBtn').addEventListener('click', () => {
 let abrasiveSaveCounter = 0;
 
 setInterval(() => {
+  // E-stop or paused — freeze all timers
+  if (state.estop || state.paused) {
+    render();
+    return;
+  }
+
   // Cooldown tick (runs independently — main timer is paused)
   if (cooldownActive) {
     cooldownRemainingMs = Math.max(0, cooldownRemainingMs - 1000);
@@ -559,7 +628,30 @@ setInterval(() => {
 // ============================================================
 //  Serial line parsing (STATUS lines from Arduino)
 // ============================================================
+function handleEstopActive() {
+  if (state.estop) return;
+  state.estop = true;
+  if (state.running && !state.paused) {
+    state.paused = true;
+    addLogEntry('ESTOP PAUSE');
+  } else {
+    addLogEntry('ESTOP');
+  }
+  document.getElementById('estopOverlay').classList.add('visible');
+  render();
+}
+
+function handleEstopClear() {
+  if (!state.estop) return;
+  state.estop = false;
+  addLogEntry('ESTOP CLEAR');
+  document.getElementById('estopOverlay').classList.remove('visible');
+  render();
+}
+
 function parseSerialLine(line) {
+  if (line.startsWith('ESTOP:ACTIVE')) { handleEstopActive(); return; }
+  if (line.startsWith('ESTOP:CLEAR'))  { handleEstopClear();  return; }
   if (line.startsWith('STATUS ')) {
     const kv = {};
     for (const p of line.substring(7).split(' ')) {
@@ -587,6 +679,10 @@ function parseSerialLine(line) {
     }
     if (kv.vibDir !== undefined) {
       vibDir = kv.vibDir === 'R' ? 'R' : 'F';
+    }
+    if (kv.estop !== undefined) {
+      if (kv.estop === 'A' && !state.estop) handleEstopActive();
+      else if (kv.estop === 'C' && state.estop) handleEstopClear();
     }
     render();
   }

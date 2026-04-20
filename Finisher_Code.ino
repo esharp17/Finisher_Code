@@ -10,6 +10,8 @@
 #define VIB_RPWM        9
 #define VIB_LPWM        10
 
+#define ESTOP_PIN       15
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 #define STEPS_PER_REV     200
 #define RAMP_DURATION_MS  5000UL   // 5 seconds
@@ -46,6 +48,13 @@ float pendingPlanetaryRPM = 0;
 float pendingVibPWM       = 0;
 bool  vibForward          = true;
 
+// ── Emergency Stop ───────────────────────────────────────────────────────────
+// Pin 15 wired to N.C. E-stop switch to GND. INPUT_PULLUP: LOW = triggered.
+bool estopActive = false;
+unsigned long estopLastChangeMs = 0;
+int  estopLastRead = HIGH;
+const unsigned long ESTOP_DEBOUNCE_MS = 20;
+
 // ── Status Reporting ─────────────────────────────────────────────────────────
 unsigned long lastStatusMs = 0;
 const unsigned long STATUS_PERIOD_MS = 500;
@@ -75,7 +84,39 @@ void emitStatusLine() {
   Serial.print((int)pendingVibPWM);
   Serial.print(" vibDir=");
   Serial.print(vibForward ? "F" : "R");
+  Serial.print(" estop=");
+  Serial.print(estopActive ? "A" : "C");
   Serial.println();
+}
+
+// ── E-stop check (debounced) ─────────────────────────────────────────────────
+void checkEstop() {
+  int r = digitalRead(ESTOP_PIN);
+  unsigned long now = millis();
+  if (r != estopLastRead) {
+    estopLastRead = r;
+    estopLastChangeMs = now;
+    return;
+  }
+  if (now - estopLastChangeMs < ESTOP_DEBOUNCE_MS) return;
+
+  bool trigger = (r == LOW);
+  if (trigger && !estopActive) {
+    estopActive = true;
+    // Kill everything instantly (motors already powerless via hardware, but clear state)
+    vibRamp.currentVal = 0;       vibRamp.ramping = false;       vibRamp.targetVal = 0;
+    centralRamp.currentVal = 0;   centralRamp.ramping = false;   centralRamp.targetVal = 0;
+    planetaryRamp.currentVal = 0; planetaryRamp.ramping = false; planetaryRamp.targetVal = 0;
+    pendingCentralRPM = 0;
+    pendingPlanetaryRPM = 0;
+    pendingVibPWM = 0;
+    startupPhase = IDLE;
+    setVibMotor(0, vibForward);
+    Serial.println("ESTOP:ACTIVE");
+  } else if (!trigger && estopActive) {
+    estopActive = false;
+    Serial.println("ESTOP:CLEAR");
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -185,6 +226,10 @@ void parseCommand(String cmd) {
 
   // ── SOP1 ───────────────────────────────────────────────────────────────────
   if (cmd == "SOP1") {
+    if (estopActive) {
+      Serial.println("[ERR] E-STOP active — disarm before starting");
+      return;
+    }
     pendingPlanetaryRPM = -170;
     pendingCentralRPM   = 210;
     pendingVibPWM       = 211;
@@ -196,6 +241,10 @@ void parseCommand(String cmd) {
 
   // ── START ──────────────────────────────────────────────────────────────────
   if (cmd == "START") {
+    if (estopActive) {
+      Serial.println("[ERR] E-STOP active — disarm before starting");
+      return;
+    }
     if (startupPhase != IDLE && startupPhase != RUNNING) {
       Serial.println("[WARN] Startup already in progress.");
       return;
@@ -301,6 +350,7 @@ void setup() {
 
   pinMode(VIB_RPWM, OUTPUT);
   pinMode(VIB_LPWM, OUTPUT);
+  pinMode(ESTOP_PIN, INPUT_PULLUP);
   setVibMotor(0, true);
 
   Central_Motor.setMaxSpeed(rpmToStepsPerSec(600));
@@ -326,15 +376,18 @@ void loop() {
     }
   }
 
-  // ── 2. Advance startup sequence ────────────────────────────────────────────
-  updateStartupSequence();
+  // ── 2. E-stop check ────────────────────────────────────────────────────────
+  checkEstop();
 
-  // ── 3. Update ramp values ──────────────────────────────────────────────────
+  // ── 3. Advance startup sequence ────────────────────────────────────────────
+  if (!estopActive) updateStartupSequence();
+
+  // ── 4. Update ramp values ──────────────────────────────────────────────────
   updateRamp(vibRamp);
   updateRamp(centralRamp);
   updateRamp(planetaryRamp);
 
-  // ── 4. Apply outputs ───────────────────────────────────────────────────────
+  // ── 5. Apply outputs ───────────────────────────────────────────────────────
   setVibMotor((int)vibRamp.currentVal, vibForward);
 
   Central_Motor.setSpeed(centralRamp.currentVal);
@@ -343,6 +396,6 @@ void loop() {
   Planetary_Motor.setSpeed(planetaryRamp.currentVal);
   Planetary_Motor.runSpeed();
 
-  // ── 5. Periodic status ───────────────────────────────────────────────────
+  // ── 6. Periodic status ─────────────────────────────────────────────────────
   emitStatusLine();
 }

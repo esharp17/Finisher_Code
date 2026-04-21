@@ -114,7 +114,7 @@ function setBeacon(id, cls) {
 // ============================================================
 function render() {
   document.getElementById('planetVal').textContent = goal.planetRpm;
-  document.getElementById('centralVal').textContent = Math.round(goal.centralRpm / 4);
+  document.getElementById('centralVal').textContent = goal.centralRpm;
   document.getElementById('vibVal').textContent = goal.vibPwm;
   document.getElementById('timeVal').textContent = goal.timeMins;
   document.getElementById('vibDirBtn').textContent = vibDir === 'F' ? 'FWD' : 'REV';
@@ -325,9 +325,7 @@ function applyAdjust(target, dir) {
     if (state.running && !state.paused && !state.estop) sendCommand(`P:${signedPlanet()}`);
   }
   if (target === 'central') {
-    // Central display is 1:4 scaled. Each click changes real motor RPM by 40
-    // so that the displayed value changes by 10.
-    const delta = dir === 'up' ? 40 : -40;
+    const delta = dir === 'up' ? 10 : -10;
     goal.centralRpm = Math.max(0, Math.min(600, goal.centralRpm + delta));
     if (state.running && !state.paused && !state.estop) sendCommand(`C:${signedCentral()}`);
   }

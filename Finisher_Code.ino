@@ -230,11 +230,11 @@ void parseCommand(String cmd) {
       Serial.println("[ERR] E-STOP active — disarm before starting");
       return;
     }
-    pendingPlanetaryRPM = -170;
-    pendingCentralRPM   = 210;
+    pendingPlanetaryRPM = -300;
+    pendingCentralRPM   = 280;
     pendingVibPWM       = 211;
     beginStartupSequence();
-    Serial.println("[SOP1] Stanard cycle: P:170 RPM | C:210 RPM | V:211 PWM (83%)");
+    Serial.println("[SOP1] Standard cycle: P:300 RPM | C:280 RPM | V:211 PWM (83%)");
     Serial.println("[SOP1] Sequenced ramp starting...");
     return;
   }

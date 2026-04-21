@@ -265,17 +265,16 @@ function startSop() {
   runNumber++;
   state.running   = true;
   state.sopActive = true;
-  goal.planetRpm  = settings.sopPlanetRpm;
-  goal.centralRpm = settings.sopCentralRpm;
-  goal.vibPwm     = settings.sopVibPwm;
+  // Use the Arduino's hardcoded SOP1 values so the app matches Arduino IDE SOP1 exactly.
+  // The Settings tab's SOP values only govern the timer, not the motor targets.
+  goal.planetRpm  = 170;
+  goal.centralRpm = 210;
+  goal.vibPwm     = 211;
   goal.timeMins   = settings.sopTimeMins;
   state.countdownMs = settings.sopTimeMins * 60 * 1000;
   runTimeSinceCooldown = 0;
   dirSign = 1;
-  sendCommand(`P:${signedPlanet()}`);
-  sendCommand(`C:${signedCentral()}`);
-  sendCommand(`V:${goal.vibPwm}`);
-  sendCommand('START');
+  sendCommand('SOP1');
   addLogEntry('SOP STARTED');
   render();
 }
